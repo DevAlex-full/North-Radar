@@ -246,7 +246,10 @@ function ResultView({
   onClose: () => void;
 }) {
   const count = result.written.length;
-  const hasErrors = result.errors.length > 0;
+  // 3 estados reais (ver TeamPipeline.ts): 'failed' só quando nenhum documento
+  // foi gravado — ter 1+ erro de agente com documento gerado é "ressalva", não falha.
+  const failed = result.status === 'failed';
+  const hasWarnings = result.status === 'success_with_warnings';
 
   const openFolder = async () => {
     await api.app.openWorkspaceDir('oportunidades');
@@ -254,11 +257,14 @@ function ResultView({
 
   return (
     <>
-      {/* Animação de check */}
+      {/* Animação de check (ou alerta, se falha real) */}
       <div className="relative w-20 h-20 grid place-items-center">
         {/* Onda que expande e some */}
         <motion.span
-          className={cn('absolute w-16 h-16 rounded-full', hasErrors ? 'bg-amber/30' : 'bg-green/30')}
+          className={cn(
+            'absolute w-16 h-16 rounded-full',
+            failed ? 'bg-rose/20' : hasWarnings ? 'bg-amber/30' : 'bg-green/30',
+          )}
           initial={{ scale: 0.6, opacity: 0.7 }}
           animate={{ scale: 2, opacity: 0 }}
           transition={{ duration: 0.7, ease: 'easeOut' }}
@@ -267,7 +273,7 @@ function ResultView({
         <motion.div
           className={cn(
             'relative w-16 h-16 rounded-full grid place-items-center',
-            hasErrors ? 'bg-amber-soft text-amber' : 'bg-green-soft text-green',
+            failed ? 'bg-[#fee2e2] text-rose' : hasWarnings ? 'bg-amber-soft text-amber' : 'bg-green-soft text-green',
           )}
           initial={{ scale: 0, rotate: -25 }}
           animate={{ scale: 1, rotate: 0 }}
@@ -278,31 +284,43 @@ function ResultView({
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.16, type: 'spring', stiffness: 320, damping: 14 }}
           >
-            <Check size={34} strokeWidth={3} />
+            {failed ? <X size={32} strokeWidth={3} /> : <Check size={34} strokeWidth={3} />}
           </motion.span>
         </motion.div>
       </div>
 
       <div className="text-center">
-        <div className="text-[16px] font-bold text-primary">Time concluído</div>
-        <p className="text-[13px] text-secondary mt-1">
-          {count} documento{count === 1 ? '' : 's'} gerado{count === 1 ? '' : 's'} em{' '}
-          <code className="font-mono text-[12px]">oportunidades/</code>.
-        </p>
-        {hasErrors && (
-          <p className="text-[12px] text-amber mt-1.5">
-            {result.errors.length} aviso(s)/erro(s) — registrados no markdown de cada vaga.
+        <div className="text-[16px] font-bold text-primary">
+          {failed ? 'Pipeline falhou' : hasWarnings ? 'Concluído com ressalvas' : 'Time concluído'}
+        </div>
+        {failed ? (
+          <p className="text-[13px] text-rose mt-1">
+            {result.errors[0] ?? 'Nenhum documento foi gerado.'}
           </p>
+        ) : (
+          <>
+            <p className="text-[13px] text-secondary mt-1">
+              {count} documento{count === 1 ? '' : 's'} gerado{count === 1 ? '' : 's'} em{' '}
+              <code className="font-mono text-[12px]">oportunidades/</code>.
+            </p>
+            {hasWarnings && (
+              <p className="text-[12px] text-amber mt-1.5">
+                {result.errors.length} aviso(s) — registrados no markdown de cada vaga.
+              </p>
+            )}
+          </>
         )}
       </div>
 
       <div className="flex items-center gap-2 w-full justify-center pt-1">
-        <button
-          onClick={openFolder}
-          className="inline-flex items-center gap-1.5 h-10 px-4 rounded-xl bg-purple text-white text-[13.5px] font-semibold hover:opacity-90 transition"
-        >
-          <FolderOpen size={15} /> Abrir pasta
-        </button>
+        {!failed && (
+          <button
+            onClick={openFolder}
+            className="inline-flex items-center gap-1.5 h-10 px-4 rounded-xl bg-purple text-white text-[13.5px] font-semibold hover:opacity-90 transition"
+          >
+            <FolderOpen size={15} /> Abrir pasta
+          </button>
+        )}
         <button
           onClick={onClose}
           className="inline-flex items-center gap-1.5 h-10 px-4 rounded-xl border border-border bg-white text-[13.5px] font-medium text-primary hover:bg-[#f8f8fb] transition"

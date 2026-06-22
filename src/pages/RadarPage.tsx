@@ -16,7 +16,7 @@ interface RadarPageProps {
 
 export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
   const {
-    agents, tags, sites, activity, freelas, minMatchScore, runningTeam,
+    agents, tags, sites, activity, freelas, runningTeam,
     loadAll, refreshTags, refreshFreelas: refreshFreelasStore, runTeam,
   } = useRadarStore();
   const [editingTags, setEditingTags] = useState(false);
@@ -192,7 +192,7 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="flex items-baseline gap-2 shrink-0">
               <h2 className="text-[16px] font-semibold text-primary">Oportunidades recentes</h2>
-              <span className="text-[11.5px] font-medium text-secondary">match acima de {minMatchScore}%</span>
+              <span className="text-[11.5px] font-medium text-secondary">ordenadas por match</span>
             </div>
             <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
               {/* Executar time de agentes sobre as vagas selecionadas */}
@@ -273,7 +273,7 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
               <p className="text-[13px] text-secondary py-3 text-center">
                 {freelasQuery
                   ? <>Nenhum resultado para "<strong className="text-primary">{freelasQuery}</strong>".</>
-                  : <>Nenhuma oportunidade com match acima de {minMatchScore}% — rode uma varredura ou ajuste as tags monitoradas.</>}
+                  : <>Nenhuma oportunidade encontrada — rode uma varredura ou ajuste as tags monitoradas.</>}
               </p>
             ) : (
               filteredFreelas

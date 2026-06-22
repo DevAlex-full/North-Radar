@@ -30,7 +30,14 @@ export interface TeamProgressEvent {
 }
 
 export interface TeamRunResult {
+  /** Compatibilidade: true quando status !== 'failed' (documento foi gerado). */
   ok: boolean;
+  /**
+   * 'success' — nenhum erro de agente. 'success_with_warnings' — documento
+   * gerado mas algum agente teve erro não-bloqueante no caminho (handoff
+   * seguiu adiante por design). 'failed' — nenhum documento foi gravado.
+   */
+  status: 'success' | 'success_with_warnings' | 'failed';
   written: string[];
   errors: string[];
   dir: string;

@@ -19,9 +19,12 @@ interface RadarState {
   agents: Agent[];
   runsByAgent: Record<number, AgentRun | undefined>; // last active run per agent
   // Oportunidades lidas SOMENTE dos JSON em {workspace}/freelas/ (fonte de
-  // verdade), já filtradas pelo score mínimo e ordenadas por match.
+  // verdade) — TODAS aparecem, ordenadas por match (desc). A badge
+  // Alta/Média/Baixa/Evitar (classifyMatchScore) cuida da priorização visual.
   freelas: Opportunity[];
-  // Limiar de match (%) efetivamente aplicado — vem das settings, com fallback.
+  // Limiar de match (%) salvo em Settings — hoje só informativo (referência
+  // para futura ordenação/destaque configurável). NÃO filtra/esconde
+  // oportunidades — ver refreshFreelas().
   minMatchScore: number;
   sites: MonitoredSite[];
   tags: RadarTag[];
@@ -107,8 +110,11 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     set({ agents, sites, tags, activity, summary, runsByAgent, loading: false });
   },
 
-  // Re-lê os JSONs em {workspace}/freelas/, mantém só os que passam do limiar
-  // de match (configurável em Settings → Match Engine) e ordena por % de match.
+  // Re-lê os JSONs em {workspace}/freelas/ e ordena por % de match (desc).
+  // Não corta por threshold — TODAS as oportunidades aparecem, mesmo as de
+  // baixo match (a badge Alta/Média/Baixa/Evitar já resolve a priorização
+  // visual). `minMatchScore` é mantido só como referência informativa na UI
+  // (texto "ordenadas por match"), não como filtro que esconde resultados.
   refreshFreelas: async () => {
     const [opps, minRow] = await Promise.all([
       api.opportunities.listFromFreelas(),
@@ -116,8 +122,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     ]);
     const parsed = minRow?.value != null && minRow.value !== '' ? Number(minRow.value) : NaN;
     const threshold = Number.isFinite(parsed) ? parsed : MIN_MATCH_SCORE_DEFAULT;
-    const matched = (opps ?? []).filter((o) => (o.match_score ?? 0) > threshold);
-    set({ freelas: sortByMatch(matched), minMatchScore: threshold });
+    set({ freelas: sortByMatch(opps ?? []), minMatchScore: threshold });
   },
 
   refreshActivity: async () => {
@@ -178,16 +183,26 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     try {
       const result = await api.agents.runTeam(opps);
       set({ teamResult: result });
-      get().pushNotification({
-        type: 'team',
-        title: result.ok ? 'Pipeline concluído' : 'Pipeline falhou',
-        description: result.ok
-          ? `${result.written.length} documento${result.written.length !== 1 ? 's' : ''} gerado${result.written.length !== 1 ? 's' : ''}`
-          : result.errors[0] ?? 'Erro desconhecido',
-      });
+      const docCount = result.written.length;
+      const docLabel = `${docCount} documento${docCount !== 1 ? 's' : ''} gerado${docCount !== 1 ? 's' : ''}`;
+      // 3 estados reais — 'success_with_warnings' não é falha: o documento foi
+      // gerado, só houve algum erro de agente não-bloqueante no caminho.
+      const title =
+        result.status === 'success'
+          ? 'Pipeline concluído'
+          : result.status === 'success_with_warnings'
+            ? 'Concluído com ressalvas'
+            : 'Pipeline falhou';
+      const description =
+        result.status === 'failed'
+          ? result.errors[0] ?? 'Erro desconhecido'
+          : result.status === 'success_with_warnings'
+            ? `${docLabel} — ${result.errors.length} aviso${result.errors.length !== 1 ? 's' : ''} (ver documento)`
+            : docLabel;
+      get().pushNotification({ type: 'team', title, description });
     } catch (e) {
       const msg = (e as Error).message;
-      set({ teamResult: { ok: false, written: [], errors: [msg], dir: '' } });
+      set({ teamResult: { ok: false, status: 'failed', written: [], errors: [msg], dir: '' } });
       get().pushNotification({ type: 'error', title: 'Erro no pipeline', description: msg });
     } finally {
       off();

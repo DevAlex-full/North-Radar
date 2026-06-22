@@ -35,7 +35,18 @@ export interface TeamProgressEvent {
 }
 
 export interface TeamRunResult {
+  /** Compatibilidade: true quando status !== 'failed' (documento foi gerado). */
   ok: boolean;
+  /**
+   * 'success'           — nenhum erro de agente, tudo correu limpo.
+   * 'success_with_warnings' — pelo menos 1 documento foi gravado, mas algum
+   *                       agente teve erro não-bloqueante no caminho (o
+   *                       handoff seguiu adiante mesmo assim, por design).
+   * 'failed'            — nenhum documento foi gravado (falha bloqueante real:
+   *                       nenhum agente ativo, erro ao gravar todos os arquivos,
+   *                       exceção não tratada antes de qualquer escrita).
+   */
+  status: 'success' | 'success_with_warnings' | 'failed';
   written: string[];
   errors: string[];
   dir: string;
@@ -138,7 +149,13 @@ class TeamPipelineImpl extends EventEmitter {
    */
   async run(opps: PipelineOpportunity[]): Promise<TeamRunResult> {
     if (this.running) {
-      return { ok: false, written: [], errors: ['Já existe uma execução do time em andamento.'], dir: '' };
+      return {
+        ok: false,
+        status: 'failed',
+        written: [],
+        errors: ['Já existe uma execução do time em andamento.'],
+        dir: '',
+      };
     }
     this.running = true;
     const written: string[] = [];
@@ -156,7 +173,13 @@ class TeamPipelineImpl extends EventEmitter {
 
       if (agents.length === 0) {
         this.emit('progress', { type: 'error', error: 'Nenhum agente ativo.' } as TeamProgressEvent);
-        return { ok: false, written, errors: ['Nenhum agente ativo para executar.'], dir };
+        return {
+          ok: false,
+          status: 'failed',
+          written,
+          errors: ['Nenhum agente ativo para executar.'],
+          dir,
+        };
       }
 
       const oppTotal = opps.length;
@@ -257,11 +280,21 @@ class TeamPipelineImpl extends EventEmitter {
         metadata: { written: written.length, errors: errors.length },
       });
       this.emit('progress', { type: 'done', filePath: dir } as TeamProgressEvent);
-      return { ok: errors.length === 0, written, errors, dir };
+
+      // Falha real (bloqueante) = nenhum documento foi gravado.
+      // Sucesso com ressalvas = pelo menos 1 documento gravado, mas houve
+      // erro de agente não-bloqueante no caminho (handoff seguiu por design).
+      // Sucesso = nenhum erro registrado.
+      const status: TeamRunResult['status'] =
+        written.length === 0 ? 'failed' : errors.length === 0 ? 'success' : 'success_with_warnings';
+      return { ok: status !== 'failed', status, written, errors, dir };
     } catch (e) {
       const msg = (e as Error).message;
       this.emit('progress', { type: 'error', error: msg } as TeamProgressEvent);
-      return { ok: false, written, errors: [...errors, msg], dir };
+      // Mesma regra: só é 'failed' de fato se nenhum documento chegou a ser
+      // gravado antes da exceção interromper o loop.
+      const status: TeamRunResult['status'] = written.length === 0 ? 'failed' : 'success_with_warnings';
+      return { ok: status !== 'failed', status, written, errors: [...errors, msg], dir };
     } finally {
       this.running = false;
     }
