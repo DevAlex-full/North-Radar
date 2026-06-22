@@ -112,6 +112,7 @@ export function buildAgentSeeds(): schema.NewAgent[] {
       effort_level: 'high',
       autonomy_level: 'autonomous',
       model: 'sonnet',
+      provider: 'claude-cli',
       temperature: 0.3,
       max_tokens: 12000,
       retries: 2,
@@ -120,6 +121,7 @@ export function buildAgentSeeds(): schema.NewAgent[] {
       icon: 'ClipboardList',
       runtime_config_json: JSON.stringify({
         model: 'sonnet',
+        provider: 'claude-cli',
         effort: 'high',
         cloud_p: true,
         skip_permissions: true,
@@ -140,6 +142,7 @@ export function buildAgentSeeds(): schema.NewAgent[] {
       effort_level: 'high',
       autonomy_level: 'autonomous',
       model: 'sonnet',
+      provider: 'claude-cli',
       temperature: 0.2,
       max_tokens: 12000,
       retries: 2,

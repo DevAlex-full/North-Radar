@@ -14,6 +14,7 @@ export const agents = sqliteTable('agents', {
   effort_level: text('effort_level').default('medium'), // low | medium | high | maximum
   autonomy_level: text('autonomy_level').default('semi'), // manual | semi | autonomous | full
   model: text('model').default('sonnet'),
+  provider: text('provider').default('claude-cli'),
   temperature: real('temperature').default(0.3),
   max_tokens: integer('max_tokens').default(12000),
   retries: integer('retries').default(2),

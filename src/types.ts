@@ -1,3 +1,4 @@
+export type ProviderId = 'claude-cli' | 'anthropic' | 'openai' | 'gemini';
 export interface Agent {
   id: number;
   name: string;
@@ -10,6 +11,7 @@ export interface Agent {
   effort_level: string;
   autonomy_level: string;
   model: string;
+  provider: ProviderId | string;
   temperature: number;
   max_tokens: number;
   retries: number;

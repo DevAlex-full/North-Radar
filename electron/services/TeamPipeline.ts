@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { asc, eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import * as schema from '../db/schema';
-import { ClaudeExecutionService } from './ClaudeExecutionService';
+import { ProviderRegistry } from './providers/ProviderRegistry';
 import { getOportunidadesDir, slugForFilename, timestampForFilename } from './ExecutionStorage';
 import { ActivityLogger } from './ActivityLogger';
 
@@ -190,20 +190,24 @@ class TeamPipelineImpl extends EventEmitter {
           let output = '';
           let ok = false;
           try {
-            const proc = ClaudeExecutionService.execute({
+            const result = await ProviderRegistry.execute(agent.provider, {
               prompt,
-              model: agent.model ?? undefined,
+              model: agent.model ?? 'sonnet',
+              temperature: agent.temperature ?? undefined,
               maxTokens: agent.max_tokens ?? undefined,
               timeoutSeconds: agent.timeout_seconds ?? 300,
-              env: { FREELA_RADAR_AGENT: agent.slug, FREELA_RADAR_PIPELINE: '1' },
+              context: { agentSlug: agent.slug },
             });
-            const result = await proc.done;
-            if (result.code === 0 && result.stdout.trim()) {
-              output = result.stdout.trim();
+            if (result.ok && result.output.trim()) {
+              output = result.output.trim();
               ok = true;
             } else {
-              const reason = (result.stderr || `processo encerrou com código ${result.code}`).trim();
-              output = `> ⚠️ Falha no agente **${agent.name}**: ${reason.slice(0, 500)}`;
+              const { provider, model } = result.meta;
+              const err = result.error;
+              // Log estruturado (Etapa 5): provider + modelo + tipo de erro + mensagem real,
+              // no lugar do antigo "processo encerrou com código X" — mesmo quando stderr está vazio.
+              const reason = `[${provider}/${model}] ${err?.message ?? 'erro desconhecido'}`.trim();
+              output = `> ⚠️ Falha no agente **${agent.name}** (${provider}): ${reason.slice(0, 500)}`;
               errors.push(`${opp.title} / ${agent.name}: ${reason.slice(0, 200)}`);
             }
           } catch (e) {

@@ -47,7 +47,22 @@ const TOOLS = ['filesystem', 'terminal', 'browser', 'playwright', 'markdown_expo
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'maximum'];
 const AUTONOMY_LEVELS = ['manual', 'semi', 'autonomous', 'full'];
 const OUTPUT_FORMATS = ['markdown', 'structured_markdown', 'json', 'checklist', 'report', 'rich_text'];
-const MODELS = ['sonnet', 'opus', 'haiku'];
+
+// Provider Layer: cada provider tem seu próprio conjunto de modelos válidos.
+// 'claude-cli' é o provider LEGADO (depende do Claude CLI instalado na máquina).
+const PROVIDERS: Array<{ id: 'claude-cli' | 'anthropic' | 'openai' | 'gemini'; label: string }> = [
+  { id: 'claude-cli', label: 'Claude CLI (legado)' },
+  { id: 'anthropic', label: 'Anthropic API' },
+  { id: 'openai', label: 'OpenAI API' },
+  { id: 'gemini', label: 'Gemini API' },
+];
+const MODELS_BY_PROVIDER: Record<string, string[]> = {
+  'claude-cli': ['sonnet', 'opus', 'haiku'],
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o3'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+};
+const MODELS = MODELS_BY_PROVIDER['claude-cli'];
 
 function slugify(name: string): string {
   return name
@@ -120,6 +135,7 @@ export function AgentsPage({ initialAgentId }: AgentsPageProps = {}) {
     effort_level: 'high',
     autonomy_level: 'semi',
     model: 'sonnet',
+    provider: 'claude-cli',
     temperature: 0.3,
   } as const;
 
@@ -503,6 +519,7 @@ function AgentEditor({ agent, onSaved, onDelete }: EditorProps) {
         effort_level: draft.effort_level,
         autonomy_level: draft.autonomy_level,
         model: draft.model,
+        provider: draft.provider,
         temperature: draft.temperature,
         max_tokens: draft.max_tokens,
         timeout_seconds: draft.timeout_seconds,
@@ -694,14 +711,41 @@ function AgentEditor({ agent, onSaved, onDelete }: EditorProps) {
         </Field>
       </Section>
 
-      {/* Modelo + Esforço + Autonomia */}
-      <Section title="Modelo & Execução" icon={Cpu}>
-        <div className="grid grid-cols-3 gap-4">
-          <Field label="Modelo">
-            <select value={draft.model} onChange={(e) => set('model', e.target.value)} className={inputCls}>
-              {MODELS.map((m) => <option key={m}>{m}</option>)}
+      {/* Provider + Modelo + Esforço + Autonomia */}
+      <Section title="Provider & Execução" icon={Cpu}>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <Field label="Provider">
+            <select
+              value={draft.provider ?? 'claude-cli'}
+              onChange={(e) => {
+                const nextProvider = e.target.value;
+                set('provider', nextProvider);
+                // Troca de provider invalida o modelo atual se ele não existir
+                // na lista do novo provider — cai no primeiro modelo válido.
+                const validModels = MODELS_BY_PROVIDER[nextProvider] ?? [];
+                if (!validModels.includes(draft.model ?? '')) {
+                  set('model', validModels[0] ?? '');
+                }
+              }}
+              className={inputCls}
+            >
+              {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
           </Field>
+          <Field label="Modelo">
+            <select value={draft.model} onChange={(e) => set('model', e.target.value)} className={inputCls}>
+              {(MODELS_BY_PROVIDER[draft.provider ?? 'claude-cli'] ?? MODELS).map((m) => <option key={m}>{m}</option>)}
+            </select>
+          </Field>
+
+        </div>
+        {draft.provider !== 'claude-cli' && (
+          <p className="text-[12px] text-secondary mb-4 -mt-2">
+            Requer a chave de API correspondente salva em Settings → Chaves.
+          </p>
+        )}
+        <div className="grid grid-cols-3 gap-4">
+
           <Field label="Effort level">
             <select value={draft.effort_level} onChange={(e) => set('effort_level', e.target.value)} className={inputCls}>
               {EFFORT_LEVELS.map((m) => <option key={m}>{m}</option>)}
@@ -752,18 +796,18 @@ function AgentEditor({ agent, onSaved, onDelete }: EditorProps) {
       {/* Runtime preview */}
       <Section title="Runtime config (JSON)" icon={Braces}>
         <pre className="bg-[#0f1322] text-[#cdd5f5] text-[12px] leading-relaxed p-4 rounded-xl overflow-x-auto">
-{JSON.stringify({
-  model: draft.model,
-  effort: draft.effort_level,
-  autonomy: draft.autonomy_level,
-  cloud_p: true,
-  skip_permissions: true,
-  temperature: draft.temperature,
-  max_tokens: draft.max_tokens,
-  timeout_seconds: draft.timeout_seconds,
-  tools: Object.fromEntries(tools.map((t) => [t.tool_name, t.enabled])),
-  ...runtimeConfig,
-}, null, 2)}
+          {JSON.stringify({
+            model: draft.model,
+            effort: draft.effort_level,
+            autonomy: draft.autonomy_level,
+            cloud_p: true,
+            skip_permissions: true,
+            temperature: draft.temperature,
+            max_tokens: draft.max_tokens,
+            timeout_seconds: draft.timeout_seconds,
+            tools: Object.fromEntries(tools.map((t) => [t.tool_name, t.enabled])),
+            ...runtimeConfig,
+          }, null, 2)}
         </pre>
       </Section>
 

@@ -19,6 +19,7 @@ export function applySchema(db: import('better-sqlite3').Database = getRawSqlite
       effort_level TEXT DEFAULT 'medium',
       autonomy_level TEXT DEFAULT 'semi',
       model TEXT DEFAULT 'sonnet',
+      provider TEXT DEFAULT 'claude-cli',
       temperature REAL DEFAULT 0.3,
       max_tokens INTEGER DEFAULT 12000,
       retries INTEGER DEFAULT 2,
@@ -132,6 +133,11 @@ export function applySchema(db: import('better-sqlite3').Database = getRawSqlite
     db.exec(`UPDATE agents SET sort_order = id WHERE sort_order IS NULL OR sort_order = 0;`);
   }
 
+  if (!columns.some((c) => c.name === 'provider')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN provider TEXT DEFAULT 'claude-cli';`);
+        db.exec(`UPDATE agents SET provider = 'claude-cli' WHERE provider IS NULL OR provider = '';`);
+        }
+
   // Índices que dependem das colunas migradas — só agora podem ser criados com segurança.
   db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_sort_order ON agents(sort_order);`);
 
@@ -211,15 +217,15 @@ function applyAgentPromptsV2(db: import('better-sqlite3').Database) {
   const NEW_OP_PITCH = `Se PRD/ADR não estiverem no input, gere uma proposta razoável mas mais conservadora, sinalizando lacunas.\nComece SEMPRE refletindo o problema do cliente nas palavras dele (extraído do PRD).\nUse bullets curtos. Cronograma derivado das decisões do ADR.\nCTA específico no final (ex: "envio o contrato em 24h se a proposta fizer sentido"), nunca vago.\nOutput em markdown rico, pronto pra enviar ao cliente.`;
 
   const updates: PromptUpdate[] = [
-    { slug: 'prd-agent',   field: 'soul_prompt',        old: OLD_SOUL_PRD,    next: NEW_SOUL_PRD },
-    { slug: 'prd-agent',   field: 'system_prompt',      old: OLD_SYSTEM_PRD,  next: NEW_SYSTEM_PRD },
-    { slug: 'prd-agent',   field: 'operational_prompt', old: OLD_OP_PRD,      next: NEW_OP_PRD },
-    { slug: 'adr-agent',   field: 'soul_prompt',        old: OLD_SOUL_ADR,    next: NEW_SOUL_ADR },
-    { slug: 'adr-agent',   field: 'system_prompt',      old: OLD_SYSTEM_ADR,  next: NEW_SYSTEM_ADR },
-    { slug: 'adr-agent',   field: 'operational_prompt', old: OLD_OP_ADR,      next: NEW_OP_ADR },
-    { slug: 'pitch-agent', field: 'soul_prompt',        old: OLD_SOUL_PITCH,  next: NEW_SOUL_PITCH },
-    { slug: 'pitch-agent', field: 'system_prompt',      old: OLD_SYSTEM_PITCH,next: NEW_SYSTEM_PITCH },
-    { slug: 'pitch-agent', field: 'operational_prompt', old: OLD_OP_PITCH,    next: NEW_OP_PITCH },
+    { slug: 'prd-agent', field: 'soul_prompt', old: OLD_SOUL_PRD, next: NEW_SOUL_PRD },
+    { slug: 'prd-agent', field: 'system_prompt', old: OLD_SYSTEM_PRD, next: NEW_SYSTEM_PRD },
+    { slug: 'prd-agent', field: 'operational_prompt', old: OLD_OP_PRD, next: NEW_OP_PRD },
+    { slug: 'adr-agent', field: 'soul_prompt', old: OLD_SOUL_ADR, next: NEW_SOUL_ADR },
+    { slug: 'adr-agent', field: 'system_prompt', old: OLD_SYSTEM_ADR, next: NEW_SYSTEM_ADR },
+    { slug: 'adr-agent', field: 'operational_prompt', old: OLD_OP_ADR, next: NEW_OP_ADR },
+    { slug: 'pitch-agent', field: 'soul_prompt', old: OLD_SOUL_PITCH, next: NEW_SOUL_PITCH },
+    { slug: 'pitch-agent', field: 'system_prompt', old: OLD_SYSTEM_PITCH, next: NEW_SYSTEM_PITCH },
+    { slug: 'pitch-agent', field: 'operational_prompt', old: OLD_OP_PITCH, next: NEW_OP_PITCH },
   ];
 
   let updated = 0;
@@ -240,6 +246,6 @@ function applyAgentPromptsV2(db: import('better-sqlite3').Database) {
 
   console.log(
     `[migrate] prompts v2: ${updated} campo(s) atualizado(s)` +
-      (skipped > 0 ? `, ${skipped} preservado(s) (já tinham edição)` : ''),
+    (skipped > 0 ? `, ${skipped} preservado(s) (já tinham edição)` : ''),
   );
 }

@@ -282,7 +282,7 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
                       className={inputCls}
                     >
                       <option value="light">Claro</option>
-                      <option value="dio">dio.me theme</option>
+                      <option value="dark">Escuro</option>
                     </select>
                   </Field>
                   <Field label="Idioma">

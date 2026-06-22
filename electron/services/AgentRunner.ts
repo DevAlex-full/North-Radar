@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import * as schema from '../db/schema';
-import { ClaudeExecutionService, type ClaudeExecutionHandle } from './ClaudeExecutionService';
+import { ProviderRegistry, type ProviderExecuteResult } from './providers/ProviderRegistry';
 import { ActivityLogger } from './ActivityLogger';
 import { writeExecutionOutput, extensionForFormat } from './ExecutionStorage';
 
@@ -22,9 +22,9 @@ export class AgentRunner extends EventEmitter {
   readonly runId: number;
   readonly agentId: number;
   readonly opportunityId: number | null;
-  private process: ClaudeExecutionHandle | null = null;
   private logs = '';
   private cancelled = false;
+  private abortController = new AbortController();
 
   constructor(runId: number, agentId: number, opportunityId: number | null) {
     super();
@@ -65,10 +65,6 @@ export class AgentRunner extends EventEmitter {
 
     const prompt = this.buildPrompt(agent, opp);
 
-    const runtimeConfig = (() => {
-      try { return JSON.parse(agent.runtime_config_json ?? '{}'); } catch { return {}; }
-    })() as Record<string, unknown>;
-
     this.update({
       status: 'running',
       progress: 5,
@@ -79,59 +75,59 @@ export class AgentRunner extends EventEmitter {
       type: 'agent_run',
       title: `${agent.name} iniciou execução`,
       description: opp?.title ?? 'Execução manual',
-      metadata: { runId: this.runId, agentId: this.agentId },
+      metadata: { runId: this.runId, agentId: this.agentId, provider: agent.provider },
     });
 
-    this.process = ClaudeExecutionService.execute({
+    const result = await ProviderRegistry.execute(agent.provider, {
       prompt,
-      model: agent.model ?? undefined,
+      model: agent.model ?? 'sonnet',
+      temperature: agent.temperature ?? undefined,
       maxTokens: agent.max_tokens ?? undefined,
       timeoutSeconds: agent.timeout_seconds ?? 300,
-      env: {
-        FREELA_RADAR_AGENT: agent.slug,
-        FREELA_RADAR_RUN_ID: String(this.runId),
+      context: { agentSlug: agent.slug, runId: this.runId },
+      signal: this.abortController.signal,
+      onChunk: (chunk: string) => {
+        this.logs += chunk;
+        const heur = this.heuristicProgress(this.logs);
+
+        this.update({
+          status: 'running',
+          progress: heur.progress,
+          current_step: heur.step,
+          next_step: heur.next,
+          logChunk: chunk,
+        });
       },
     });
 
-    this.process.on('stdout', (chunk: string) => {
-      this.logs += chunk;
-      const heur = this.heuristicProgress(this.logs);
-      this.update({
-        status: 'running',
-        progress: heur.progress,
-        current_step: heur.step,
-        next_step: heur.next,
-        logChunk: chunk,
-      });
-    });
-
-    this.process.on('stderr', (chunk: string) => {
-      this.logs += `[stderr] ${chunk}`;
-      this.update({ status: 'running', logChunk: `[stderr] ${chunk}` });
-    });
-
-    this.process.on('error', (err: Error) => {
-      this.fail(err.message);
-    });
-
-    const result = await this.process.done;
     if (this.cancelled) return;
 
-    if (result.code === 0) {
-      this.complete(result.stdout);
+    if (result.ok) {
+      this.complete(result.output, result.meta);
     } else {
-      this.fail(result.stderr || `Processo encerrou com código ${result.code}`);
+      this.fail(result);
     }
   }
 
   private buildPrompt(agent: schema.Agent, opp: schema.Opportunity | null | undefined): string {
     const parts: string[] = [];
+
     parts.push(`# IDENTIDADE\n${agent.soul_prompt ?? ''}`);
     parts.push(`# MISSÃO\n${agent.system_prompt ?? ''}`);
-    if (agent.operational_prompt) parts.push(`# REGRAS OPERACIONAIS\n${agent.operational_prompt}`);
+
+    if (agent.operational_prompt) {
+      parts.push(`# REGRAS OPERACIONAIS\n${agent.operational_prompt}`);
+    }
 
     if (opp) {
-      const tags = (() => { try { return JSON.parse(opp.detected_tags ?? '[]') as string[]; } catch { return []; } })();
+      const tags = (() => {
+        try {
+          return JSON.parse(opp.detected_tags ?? '[]') as string[];
+        } catch {
+          return [];
+        }
+      })();
+
       parts.push(`# OPORTUNIDADE
 - Título: ${opp.title}
 - Descrição: ${opp.description ?? '(sem descrição)'}
@@ -151,45 +147,48 @@ Use cabeçalhos markdown e numere passos quando útil.`);
   }
 
   private heuristicProgress(buffer: string): { progress: number; step: string; next?: string } {
-    // crude heuristic — looks for markdown headings and step markers
-    const lines = buffer.split('\n').filter((l) => l.trim().length > 0);
-    const headings = lines.filter((l) => /^#{1,3}\s+/.test(l));
+    const lines = buffer.split('\n').filter((line) => line.trim().length > 0);
+    const headings = lines.filter((line) => /^#{1,3}\s+/.test(line));
     const lastHeading = headings.at(-1) ?? '';
-    const nextHeading = headings.at(-2) ?? '';
+    const previousHeading = headings.at(-2) ?? '';
     const progress = Math.min(95, 10 + Math.floor(lines.length * 1.5));
+
     return {
       progress,
       step: lastHeading.replace(/^#+\s+/, '').slice(0, 80) || 'Gerando conteúdo',
-      next: nextHeading.replace(/^#+\s+/, '').slice(0, 80) || undefined,
+      next: previousHeading.replace(/^#+\s+/, '').slice(0, 80) || undefined,
     };
   }
 
   private update(patch: Partial<AgentRunEvent>) {
     const db = getDb();
     const dbPatch: Partial<schema.AgentRun> = {};
+
     if (patch.status) dbPatch.status = patch.status;
     if (typeof patch.progress === 'number') dbPatch.progress = patch.progress;
     if (patch.current_step) dbPatch.current_step = patch.current_step;
     if (patch.next_step !== undefined) dbPatch.next_step = patch.next_step ?? '';
+
     if (patch.logChunk) {
       const row = db.select().from(schema.agent_runs).where(eq(schema.agent_runs.id, this.runId)).get();
       const newLogs = (row?.logs ?? '') + patch.logChunk;
       dbPatch.logs = newLogs.length > 200_000 ? newLogs.slice(-200_000) : newLogs;
     }
+
     db.update(schema.agent_runs).set(dbPatch).where(eq(schema.agent_runs.id, this.runId)).run();
     this.emit('event', { runId: this.runId, agentId: this.agentId, ...patch });
   }
 
-  private complete(output: string) {
+  private complete(output: string, meta: ProviderExecuteResult['meta']) {
     const db = getDb();
     const agent = db.select().from(schema.agents).where(eq(schema.agents.id, this.agentId)).get();
     const opp = this.opportunityId
       ? db.select().from(schema.opportunities).where(eq(schema.opportunities.id, this.opportunityId)).get()
       : null;
 
-    // Grava o output em arquivo dentro de {workspace}/executions/
     let filePath: string | undefined;
     let writeError: string | undefined;
+
     try {
       filePath = writeExecutionOutput({
         runId: this.runId,
@@ -198,7 +197,8 @@ Use cabeçalhos markdown e numere passos quando útil.`);
         format: agent?.output_format,
         content: output,
       });
-      console.log(`[AgentRunner] run #${this.runId} → arquivo gravado em ${filePath}`);
+
+      console.log(`[AgentRunner] run #${this.runId} (${meta.provider}/${meta.model}, ${meta.durationMs}ms) → arquivo gravado em ${filePath}`);
     } catch (err) {
       writeError = (err as Error).message;
       console.error('[AgentRunner] falha ao gravar arquivo de saída:', writeError);
@@ -217,7 +217,14 @@ Use cabeçalhos markdown e numere passos quando útil.`);
       type: extensionForFormat(agent?.output_format),
       title: 'Artefato gerado',
       content: output,
-      metadata_json: JSON.stringify({ runId: this.runId, filePath, writeError }),
+      metadata_json: JSON.stringify({
+        runId: this.runId,
+        filePath,
+        writeError,
+        provider: meta.provider,
+        model: meta.model,
+        durationMs: meta.durationMs,
+      }),
       created_at: new Date(),
     }).run();
 
@@ -227,7 +234,7 @@ Use cabeçalhos markdown e numere passos quando útil.`);
         ? `${agent?.name ?? 'Agente'}: falha ao gravar arquivo`
         : `${agent?.name ?? 'Agente'} gerou documento`,
       description: writeError ?? (filePath ? `Salvo em: ${filePath}` : 'Artefato salvo'),
-      metadata: { runId: this.runId, filePath, writeError },
+      metadata: { runId: this.runId, filePath, writeError, provider: meta.provider, model: meta.model },
     });
 
     this.emit('event', {
@@ -241,28 +248,38 @@ Use cabeçalhos markdown e numere passos quando útil.`);
     });
   }
 
-  private fail(message: string) {
+  private fail(result: ProviderExecuteResult) {
     const db = getDb();
     const agent = db.select().from(schema.agents).where(eq(schema.agents.id, this.agentId)).get();
     const opp = this.opportunityId
       ? db.select().from(schema.opportunities).where(eq(schema.opportunities.id, this.opportunityId)).get()
       : null;
 
-    // Mesmo em falha, grava um log no executions/ pra inspeção:
-    // contém a mensagem de erro + stderr/stdout acumulados.
+    const { provider, model, durationMs } = result.meta;
+    const err = result.error;
+    const message = err?.message ?? 'Erro desconhecido';
+
     const errorReport = [
       `# Execução falhou — run #${this.runId}`,
       `Agente: ${agent?.name ?? this.agentId}`,
+      `Provider: ${provider}`,
+      `Modelo: ${model}`,
+      `Tipo de erro: ${err?.kind ?? 'unknown'}`,
+      `Duração até falhar: ${durationMs}ms`,
       `Data: ${new Date().toISOString()}`,
-      ``,
-      `## Erro`,
+      '',
+      '## Erro',
       message,
-      ``,
-      `## Logs capturados`,
+      '',
+      '## Detalhe técnico (raw)',
+      err?.raw ?? '(não disponível)',
+      '',
+      '## Logs capturados (streaming, quando disponível)',
       this.logs || '(sem saída)',
     ].join('\n');
 
     let filePath: string | undefined;
+
     try {
       filePath = writeExecutionOutput({
         runId: this.runId,
@@ -272,22 +289,25 @@ Use cabeçalhos markdown e numere passos quando útil.`);
         content: errorReport,
         kind: 'error',
       });
-      console.log(`[AgentRunner] run #${this.runId} (falha) → log gravado em ${filePath}`);
-    } catch (err) {
-      console.error('[AgentRunner] falha ao gravar log de erro:', err);
+
+      console.log(`[AgentRunner] run #${this.runId} (falha, ${provider}/${model}) → log gravado em ${filePath}`);
+    } catch (err2) {
+      console.error('[AgentRunner] falha ao gravar log de erro:', err2);
     }
 
     db.update(schema.agent_runs).set({
       status: 'failed',
-      error: message,
+      error: `[${provider}/${model}] ${message}`,
       completed_at: new Date(),
     }).where(eq(schema.agent_runs.id, this.runId)).run();
 
     ActivityLogger.log({
       type: 'error',
       title: 'Falha em execução de agente',
-      description: filePath ? `${message.slice(0, 150)} (log: ${filePath})` : message.slice(0, 200),
-      metadata: { runId: this.runId, filePath },
+      description: filePath
+        ? `[${provider}] ${message.slice(0, 140)} (log: ${filePath})`
+        : `[${provider}] ${message.slice(0, 180)}`,
+      metadata: { runId: this.runId, filePath, provider, model, errorKind: err?.kind },
     });
 
     this.emit('event', {
@@ -296,19 +316,22 @@ Use cabeçalhos markdown e numere passos quando útil.`);
       status: 'failed',
       progress: 0,
       current_step: 'Erro',
-      error: message,
+      error: `[${provider}] ${message}`,
       outputFilePath: filePath,
     });
   }
 
   cancel() {
     this.cancelled = true;
-    if (this.process) this.process.kill();
+    this.abortController.abort();
+
     const db = getDb();
+
     db.update(schema.agent_runs).set({
       status: 'cancelled',
       completed_at: new Date(),
     }).where(eq(schema.agent_runs.id, this.runId)).run();
+
     this.emit('event', {
       runId: this.runId,
       agentId: this.agentId,
