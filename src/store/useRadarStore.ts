@@ -15,6 +15,19 @@ export interface AppNotification {
 
 let _notifId = 0;
 
+/**
+ * Estado de UM agente dentro da execução do time atual (Pipeline visual).
+ * Derivado dos eventos de `teamProgress` (mesma fonte do TeamRunModal),
+ * mas ACUMULADO por agente em vez de sobrescrito — pra a esteira da
+ * PipelinePage mostrar PRD/ADR/Pitch em estágios diferentes ao mesmo tempo.
+ */
+export type AgentStageState = 'waiting' | 'running' | 'done' | 'failed';
+export interface AgentStage {
+  status: AgentStageState;
+  agentName: string;
+  agentIcon?: string;
+}
+
 interface RadarState {
   agents: Agent[];
   runsByAgent: Record<number, AgentRun | undefined>; // last active run per agent
@@ -36,6 +49,11 @@ interface RadarState {
   runningTeam: boolean;
   teamProgress: TeamProgressEvent | null;
   teamResult: TeamRunResult | null;
+  // Estado por-agente da execução atual — chave é o nome do agente (mesmo
+  // valor de `agentName` nos eventos). Usado pela esteira visual da
+  // PipelinePage; NÃO substitui `teamProgress` (que o TeamRunModal continua
+  // usando do jeito que já usava).
+  agentStages: Record<string, AgentStage>;
   // Notificações (últimas 5, mais recente primeiro).
   notifications: AppNotification[];
   unreadCount: number;
@@ -50,6 +68,8 @@ interface RadarState {
   runAgent: (agentId: number, opportunityId: number | null) => Promise<void>;
   runTeam: (opps: PipelineOpportunity[]) => Promise<void>;
   dismissTeamResult: () => void;
+  /** Limpa a esteira visual da Pipeline (agentStages) — volta ao "escritório vivo" com o ticker decorativo normal. Não afeta teamProgress/teamResult/TeamRunModal. */
+  clearAgentStages: () => void;
   handleRunEvent: (evt: AgentRunEvent) => void;
   pushNotification: (n: Pick<AppNotification, 'type' | 'title' | 'description'>) => void;
   markNotificationsRead: () => void;
@@ -70,6 +90,59 @@ function sortByMatch(opps: Opportunity[]): Opportunity[] {
   });
 }
 
+/**
+ * Aplica UM evento de progresso (TeamProgressEvent) sobre o mapa acumulado de
+ * estágios por agente. Função pura — fácil de testar e fácil de raciocinar
+ * sobre cada transição sem se preocupar com o resto do store.
+ *
+ * - 'agent-start' → agente em questão vira 'running' (e guarda nome/ícone).
+ * - 'agent-done'  → agente em questão vira 'done'.
+ * - 'opp-done'/'done' → qualquer agente que ainda esteja 'running' termina
+ *   'done' (segurança: garante que a esteira não "trava" visualmente caso
+ *   o handoff siga adiante sem emitir 'agent-done' explícito pra algum).
+ * - 'error' com agentName → agente em questão vira 'failed'.
+ * - outros tipos (ex: 'opp-start' sem agentName) não alteram nada aqui.
+ */
+function reduceAgentStages(
+  prev: Record<string, AgentStage>,
+  evt: TeamProgressEvent,
+): Record<string, AgentStage> {
+  if (evt.type === 'agent-start' && evt.agentName) {
+    return {
+      ...prev,
+      [evt.agentName]: { status: 'running', agentName: evt.agentName, agentIcon: evt.agentIcon },
+    };
+  }
+  if (evt.type === 'agent-done' && evt.agentName) {
+    const existing = prev[evt.agentName];
+    return {
+      ...prev,
+      [evt.agentName]: { status: 'done', agentName: evt.agentName, agentIcon: existing?.agentIcon },
+    };
+  }
+  if (evt.type === 'error' && evt.agentName) {
+    const existing = prev[evt.agentName];
+    return {
+      ...prev,
+      [evt.agentName]: { status: 'failed', agentName: evt.agentName, agentIcon: existing?.agentIcon },
+    };
+  }
+  if (evt.type === 'opp-done' || evt.type === 'done') {
+    // Fecha qualquer agente que ainda esteja 'running' — não deixa a esteira
+    // travada visualmente em "executando" se o handoff seguiu adiante.
+    let changed = false;
+    const next = { ...prev };
+    for (const name of Object.keys(next)) {
+      if (next[name].status === 'running') {
+        next[name] = { ...next[name], status: 'done' };
+        changed = true;
+      }
+    }
+    return changed ? next : prev;
+  }
+  return prev;
+}
+
 export const useRadarStore = create<RadarState>((set, get) => ({
   agents: [],
   runsByAgent: {},
@@ -84,6 +157,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   runningTeam: false,
   teamProgress: null,
   teamResult: null,
+  agentStages: {},
   notifications: [],
   unreadCount: 0,
 
@@ -178,8 +252,10 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   // eventos de progresso e guarda o resultado final pra UI exibir.
   runTeam: async (opps) => {
     if (get().runningTeam || opps.length === 0) return;
-    set({ runningTeam: true, teamProgress: null, teamResult: null });
-    const off = api.agents.onTeamEvent((evt) => set({ teamProgress: evt }));
+    set({ runningTeam: true, teamProgress: null, teamResult: null, agentStages: {} });
+    const off = api.agents.onTeamEvent((evt) => {
+      set((s) => ({ teamProgress: evt, agentStages: reduceAgentStages(s.agentStages, evt) }));
+    });
     try {
       const result = await api.agents.runTeam(opps);
       set({ teamResult: result });
@@ -212,6 +288,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   },
 
   dismissTeamResult: () => set({ teamResult: null, teamProgress: null }),
+  clearAgentStages: () => set({ agentStages: {} }),
 
   pushNotification: (n) => {
     const notif: AppNotification = { ...n, id: ++_notifId, timestamp: new Date() };

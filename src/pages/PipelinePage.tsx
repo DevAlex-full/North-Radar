@@ -12,10 +12,11 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { motion, AnimatePresence, type TargetAndTransition } from 'framer-motion';
-import { Workflow, Plus, ArrowRight, Coffee, Sprout } from 'lucide-react';
+import { Workflow, Plus, ArrowRight, Coffee, Sprout, Check, X as XIcon } from 'lucide-react';
 import { api } from '../ipc/api';
 import { cn } from '../lib/utils';
 import { BotAvatar } from '../components/BotAvatar';
+import { useRadarStore, type AgentStageState } from '../store/useRadarStore';
 import type { Agent } from '../types';
 import tablePcUrl from '../assets/table-pc.png';
 import bgOfficeUrl from '../assets/bg_office.png';
@@ -44,6 +45,11 @@ const BALLOON_TICK_MAX_MS = 5500;
 function randomBalloon(): BalloonEmoji {
   return BALLOON_EMOJIS[Math.floor(Math.random() * BALLOON_EMOJIS.length)];
 }
+
+// Emoji fixo mostrado quando o agente está REALMENTE executando (evento real
+// do TeamPipeline via agentStages) — diferente do ticker decorativo aleatório,
+// que continua rodando quando não há execução em andamento.
+const WORKING_EMOJI: BalloonEmoji = '📝';
 
 function getAnimationProps(variant: AnimationVariant): {
   animate: TargetAndTransition;
@@ -83,6 +89,11 @@ export function PipelinePage() {
   const [activeDragAgent, setActiveDragAgent] = useState<Agent | null>(null);
   const [balloons, setBalloons] = useState<Record<number, Balloon>>({});
 
+  // Estado REAL da execução do time (Radar → Executar agentes), vindo do
+  // mesmo fluxo de eventos que alimenta o TeamRunModal — ver useRadarStore.
+  const runningTeam = useRadarStore((s) => s.runningTeam);
+  const agentStages = useRadarStore((s) => s.agentStages);
+
   useEffect(() => {
     api.agents.list().then(setAgents);
   }, []);
@@ -100,10 +111,33 @@ export function PipelinePage() {
     [agents],
   );
 
+  // Estágio (waiting/running/done/failed) de cada agente ATIVO na execução
+  // atual. `undefined` = fora de qualquer execução (estado normal/decorativo
+  // do escritório). Só vira 'waiting'/'running'/'done'/'failed' quando existe
+  // pelo menos 1 entrada em `agentStages` (ou seja, uma execução começou nesta
+  // sessão da página — ainda que já tenha terminado, ver `hasRecentResult`).
+  const hasAnyStage = Object.keys(agentStages).length > 0;
+  const stageByAgentId = useMemo(() => {
+    const map = new Map<number, AgentStageState | undefined>();
+    if (!hasAnyStage) return map;
+    for (const a of activeAgents) {
+      const stage = agentStages[a.name];
+      map.set(a.id, stage?.status ?? 'waiting');
+    }
+    return map;
+  }, [activeAgents, agentStages, hasAnyStage]);
+
   // Ticker de balões: a cada 2.5–5.5s sorteia um agente ativo + um emoji
   // e mostra o balão por ~2.4s. Cleanup ao desmontar pra não vazar timer.
+  // SUSPENSO durante execução real (runningTeam) E também depois que ela
+  // termina, enquanto a esteira ainda mostra o resultado final (agentStages
+  // com algum 'done'/'failed') — senão o balão aleatório voltaria a
+  // "perturbar" visualmente os selos de concluído. Só recomeça depois que o
+  // usuário inicia uma nova execução (resetando agentStages) ou navega pra
+  // fora e volta (remontagem da página).
+  const hasRecentResult = Object.values(agentStages).some((s) => s.status === 'done' || s.status === 'failed');
   useEffect(() => {
-    if (activeAgents.length === 0) return;
+    if (activeAgents.length === 0 || runningTeam || hasRecentResult) return;
     let timer: ReturnType<typeof setTimeout>;
     let mounted = true;
     const cleanups: ReturnType<typeof setTimeout>[] = [];
@@ -137,7 +171,14 @@ export function PipelinePage() {
       clearTimeout(timer);
       cleanups.forEach(clearTimeout);
     };
-  }, [activeAgents]);
+  }, [activeAgents, runningTeam, hasRecentResult]);
+
+  // Ao iniciar uma execução real, limpa qualquer balão decorativo residual
+  // do ticker aleatório — a partir daqui o balão de cada mesa reflete o
+  // estágio real (stageByAgentId), não mais sorteio.
+  useEffect(() => {
+    if (runningTeam) setBalloons({});
+  }, [runningTeam]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -278,7 +319,15 @@ export function PipelinePage() {
           onDragEnd={handleDragEnd}
           onDragCancel={handleDragCancel}
         >
-          <OpenSpace agents={activeAgents} busy={busy} balloons={balloons} />
+          <OpenSpace
+            agents={activeAgents}
+            busy={busy}
+            balloons={balloons}
+            stageByAgentId={stageByAgentId}
+            runningTeam={runningTeam}
+            hasRecentResult={hasRecentResult}
+            onClearStages={() => useRadarStore.getState().clearAgentStages()}
+          />
           <WaitingRoom agents={waitingAgents} busy={busy} />
           <DragOverlay dropAnimation={null}>
             {activeDragAgent && (
@@ -303,10 +352,18 @@ function OpenSpace({
   agents,
   busy,
   balloons,
+  stageByAgentId,
+  runningTeam,
+  hasRecentResult,
+  onClearStages,
 }: {
   agents: Agent[];
   busy: boolean;
   balloons: Record<number, Balloon>;
+  stageByAgentId: Map<number, AgentStageState | undefined>;
+  runningTeam: boolean;
+  hasRecentResult: boolean;
+  onClearStages: () => void;
 }) {
   // Total = agentes + uma "vaga de admissão" no fim pra inserir o próximo.
   const totalStations = agents.length + 1;
@@ -329,7 +386,18 @@ function OpenSpace({
             Office space
           </span>
           <ArrowRight size={14} className="text-muted" />
-          <span className="text-[12px] text-muted">execução em ordem</span>
+          <span className="text-[12px] text-muted">
+            {runningTeam ? 'executando agora' : hasRecentResult ? 'resultado da última execução' : 'execução em ordem'}
+          </span>
+          {hasRecentResult && !runningTeam && (
+            <button
+              type="button"
+              onClick={onClearStages}
+              className="ml-2 text-[11px] font-medium text-purple hover:underline"
+            >
+              limpar esteira
+            </button>
+          )}
         </div>
         <span className="text-[12px] text-muted tabular-nums">{agents.length} agente(s)</span>
       </div>
@@ -359,7 +427,7 @@ function OpenSpace({
         {/* Filas de baias — gap-y grande simula corredor entre fileiras */}
         <div className="relative z-10 flex flex-col gap-14 items-center">
           {rows.map((row, rowIdx) => (
-            <DeskRow key={rowIdx} stations={row} disabled={busy} balloons={balloons} />
+            <DeskRow key={rowIdx} stations={row} disabled={busy} balloons={balloons} stageByAgentId={stageByAgentId} />
           ))}
         </div>
       </div>
@@ -371,10 +439,12 @@ function DeskRow({
   stations,
   disabled,
   balloons,
+  stageByAgentId,
 }: {
   stations: { agent: Agent | undefined; index: number }[];
   disabled: boolean;
   balloons: Record<number, Balloon>;
+  stageByAgentId: Map<number, AgentStageState | undefined>;
 }) {
   return (
     <div className="flex items-end gap-10">
@@ -385,6 +455,7 @@ function DeskRow({
           agent={agent}
           disabled={disabled}
           balloon={agent ? balloons[agent.id] : undefined}
+          stage={agent ? stageByAgentId.get(agent.id) : undefined}
         />
       ))}
     </div>
@@ -396,13 +467,20 @@ function DeskStation({
   agent,
   disabled,
   balloon,
+  stage,
 }: {
   index: number;
   agent: Agent | undefined;
   disabled: boolean;
   balloon?: Balloon;
+  /** Estágio REAL da execução atual (waiting/running/done/failed) — undefined fora de execução. */
+  stage?: AgentStageState;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${DESK_PREFIX}${index}`, disabled });
+  const isExecuting = stage === 'running';
+  const isDone = stage === 'done';
+  const isFailed = stage === 'failed';
+  const isWaitingTurn = stage === 'waiting'; // só relevante quando HÁ execução em andamento
 
   return (
     <div
@@ -410,6 +488,7 @@ function DeskStation({
       className={cn(
         'relative flex flex-col items-center w-[150px] p-2 rounded-xl transition',
         isOver && 'bg-purple-softer/60 ring-2 ring-purple',
+        isExecuting && 'bg-purple-softer/40 ring-2 ring-purple animate-pulse',
       )}
     >
       {/* Container da bancada — imagem da mesa/PC + avatar do agente em overlay */}
@@ -430,10 +509,13 @@ function DeskStation({
           }}
         />
 
-        {/* Avatar do agente — "sentado" na cadeira (parte inferior da workstation, sobre o tapete) */}
+        {/* Avatar do agente — "sentado" na cadeira (parte inferior da workstation, sobre o tapete).
+            Durante execução real: 'running' anima normalmente, 'waiting' fica
+            grayscale (ainda não chegou a vez dele), 'done'/'failed' ficam parados
+            (sem animação de "ocioso" — o trabalho já terminou). */}
         <div className="absolute left-1/2 -translate-x-1/2 top-[52%] z-20">
           {agent ? (
-            <AnimatedAgent agent={agent} />
+            <AnimatedAgent agent={agent} suspendAnimation={isDone || isFailed} grayscale={isWaitingTurn} />
           ) : (
             <div className="w-11 h-11 rounded-lg border-2 border-dashed border-[#cdcdd6] grid place-items-center bg-white/60 backdrop-blur-sm">
               <Plus size={16} className="text-muted" />
@@ -441,12 +523,34 @@ function DeskStation({
           )}
         </div>
 
-        {/* Balão de expressão estilo RPG Maker — acima da cabeça do agente */}
+        {/* Balão de expressão estilo RPG Maker — acima da cabeça do agente.
+            Durante execução real, o balão reflete o ESTÁGIO REAL (sem
+            Math.random): 📝 fixo enquanto 'running'; o sorteio aleatório
+            (`balloon`, vindo do ticker decorativo) só é usado fora de execução. */}
         <div className="absolute left-1/2 -translate-x-1/2 top-[12%] z-30 pointer-events-none">
-          <AnimatePresence>
-            {agent && balloon && <EmoteBalloon key={balloon.key} emoji={balloon.emoji} />}
+          <AnimatePresence mode="wait">
+            {agent && isExecuting && <EmoteBalloon key="working" emoji={WORKING_EMOJI} />}
+            {agent && !stage && balloon && <EmoteBalloon key={balloon.key} emoji={balloon.emoji} />}
           </AnimatePresence>
         </div>
+
+        {/* Selo de concluído/falhou — fica visível mesmo depois da execução
+            terminar (Pipeline "permanece mostrando o resultado final"). */}
+        {agent && (isDone || isFailed) && (
+          <div
+            className={cn(
+              'absolute -top-1.5 -right-1.5 z-40 w-6 h-6 rounded-full grid place-items-center shadow-card border-2 border-white',
+              isDone ? 'bg-[#16a34a]' : 'bg-rose',
+            )}
+            title={isDone ? 'Concluído' : 'Falhou'}
+          >
+            {isDone ? (
+              <Check size={13} strokeWidth={3} className="text-white" />
+            ) : (
+              <XIcon size={13} strokeWidth={3} className="text-white" />
+            )}
+          </div>
+        )}
 
         {/* Indicador "soltar aqui" durante drag */}
         {isOver && (
@@ -468,22 +572,47 @@ function DeskStation({
           <span className="truncate">{agent.name}</span>
         </div>
       )}
+      {/* Rótulo de estágio — só aparece durante/após execução real */}
+      {agent && stage && (
+        <div
+          className={cn(
+            'mt-1 inline-flex px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide',
+            isExecuting && 'bg-purple text-white',
+            isDone && 'bg-[#16a34a] text-white',
+            isFailed && 'bg-rose text-white',
+            isWaitingTurn && 'bg-white/70 text-[#1a1a24]',
+          )}
+        >
+          {isExecuting ? 'Executando' : isDone ? 'Concluído' : isFailed ? 'Falhou' : 'Aguardando'}
+        </div>
+      )}
     </div>
   );
 }
 
 // Wrapper que aplica uma das 3 animações ao avatar do agente — escolhida
 // aleatoriamente a cada montagem da página (re-sortida ao reabrir o Pipeline).
-function AnimatedAgent({ agent }: { agent: Agent }) {
+// `suspendAnimation` congela o avatar (trabalho já concluído/falhou — não faz
+// sentido continuar "vivo"). `grayscale` indica que ainda não chegou a vez
+// dele numa execução real em andamento.
+function AnimatedAgent({
+  agent,
+  suspendAnimation,
+  grayscale,
+}: {
+  agent: Agent;
+  suspendAnimation?: boolean;
+  grayscale?: boolean;
+}) {
   const [variant] = useState<AnimationVariant>(() => randomAnimation());
   const { animate, transition } = useMemo(() => getAnimationProps(variant), [variant]);
   return (
     <motion.div
-      animate={animate}
-      transition={transition}
+      animate={suspendAnimation ? { y: 0, scale: 1, rotate: 0 } : animate}
+      transition={suspendAnimation ? { duration: 0.2 } : transition}
       style={{ originY: 1 }} // pivot no chão pra pulinho/zoom parecerem naturais
     >
-      <DraggableAgent agent={agent} location="desk" />
+      <DraggableAgent agent={agent} location="desk" grayscale={grayscale} />
     </motion.div>
   );
 }
@@ -587,7 +716,16 @@ function EmoteBalloon({ emoji }: { emoji: BalloonEmoji }) {
   );
 }
 
-function DraggableAgent({ agent, location }: { agent: Agent; location: Location }) {
+function DraggableAgent({
+  agent,
+  location,
+  grayscale,
+}: {
+  agent: Agent;
+  location: Location;
+  /** Força grayscale independente de `location` — usado pelo estágio 'waiting' de uma execução real em andamento (ainda não chegou a vez do agente no handoff). */
+  grayscale?: boolean;
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `${DRAGGABLE_PREFIX}${agent.id}`,
   });
@@ -608,7 +746,7 @@ function DraggableAgent({ agent, location }: { agent: Agent; location: Location 
       <BotAvatar
         seed={agent.icon || agent.slug}
         size={location === 'desk' ? 40 : 36}
-        grayscale={location === 'waiting'}
+        grayscale={location === 'waiting' || !!grayscale}
       />
     </button>
   );

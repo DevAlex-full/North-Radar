@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FolderOpen, Pencil, Plus, Radar, Search, RotateCw, Users, X } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, classifyMatchScore, type MatchTier } from '../lib/utils';
 import { useRadarStore } from '../store/useRadarStore';
 import { api } from '../ipc/api';
 import { TagChip } from '../components/TagChip';
@@ -25,6 +25,11 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
   // ordenadas por % de match. Aqui só cuidamos de busca e paginação.
   const [freelasPage, setFreelasPage] = useState(0);
   const [freelasQuery, setFreelasQuery] = useState('');
+  // Filtro rápido por classificação (badge Alta/Média/Baixa/Evitar) e
+  // ordenação — atuam sobre a lista já carregada em `freelas`, sem tocar
+  // no MatchEngine nem refazer a leitura dos JSONs.
+  const [tierFilter, setTierFilter] = useState<MatchTier | 'todos'>('todos');
+  const [sortBy, setSortBy] = useState<'recentes' | 'match' | 'orcamento'>('match');
   const [refreshingFreelas, setRefreshingFreelas] = useState(false);
   // IDs das oportunidades selecionadas (checkbox) para "Executar agentes".
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -53,31 +58,63 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
         source_url: o.source_url,
       }));
     if (chosen.length === 0) return;
+    // Vai direto para a Pipeline (sem tela intermediária) — é lá que o
+    // usuário acompanha PRD → ADR → Pitch em tempo real. O TeamRunModal
+    // não bloqueia mais a tela durante a execução (ver TeamRunModal.tsx);
+    // só aparece no final, com o resumo.
+    onNavigate?.('pipeline');
     runTeam(chosen);
   };
 
   // Filtra por título ou tags — match case-insensitive em substring.
+  // Depois aplica o filtro de classificação (badge) e a ordenação escolhida.
+  // `freelas` já vem ordenada por match (desc) do store — aqui só reordenamos
+  // a cópia já filtrada, sem nenhuma chamada ao MatchEngine/IPC.
   const filteredFreelas = useMemo(() => {
     const q = freelasQuery.trim().toLowerCase();
-    if (!q) return freelas;
-    return freelas.filter((o) => {
-      const title = (o.title ?? '').toLowerCase();
-      if (title.includes(q)) return true;
-      let tags: string[] = [];
-      try {
-        const parsed = JSON.parse((o.detected_tags as string) ?? '[]');
-        if (Array.isArray(parsed)) tags = parsed.map(String);
-      } catch {
-        /* ignora */
-      }
-      return tags.some((t) => t.toLowerCase().includes(q));
-    });
-  }, [freelas, freelasQuery]);
+    let list = freelas;
 
-  // Reseta paginação ao mudar a query.
+    if (q) {
+      list = list.filter((o) => {
+        const title = (o.title ?? '').toLowerCase();
+        if (title.includes(q)) return true;
+        let opTags: string[] = [];
+        try {
+          const parsed = JSON.parse((o.detected_tags as string) ?? '[]');
+          if (Array.isArray(parsed)) opTags = parsed.map(String);
+        } catch {
+          /* ignora */
+        }
+        return opTags.some((t) => t.toLowerCase().includes(q));
+      });
+    }
+
+    if (tierFilter !== 'todos') {
+      list = list.filter((o) => classifyMatchScore(o.match_score).tier === tierFilter);
+    }
+
+    if (sortBy !== 'match') {
+      list = [...list].sort((a, b) => {
+        if (sortBy === 'recentes') {
+          const av = a.found_at ? new Date(a.found_at as string).getTime() : 0;
+          const bv = b.found_at ? new Date(b.found_at as string).getTime() : 0;
+          return bv - av;
+        }
+        // orcamento: usa o maior valor disponível (max, ou min como fallback) por vaga.
+        const aBudget = a.budget_max ?? a.budget_min ?? 0;
+        const bBudget = b.budget_max ?? b.budget_min ?? 0;
+        return bBudget - aBudget;
+      });
+    }
+    // sortBy === 'match' não precisa reordenar — `freelas` já chega assim do store.
+
+    return list;
+  }, [freelas, freelasQuery, tierFilter, sortBy]);
+
+  // Reseta paginação ao mudar busca, filtro de classificação ou ordenação.
   useEffect(() => {
     setFreelasPage(0);
-  }, [freelasQuery]);
+  }, [freelasQuery, tierFilter, sortBy]);
 
   const refreshFreelas = async () => {
     if (refreshingFreelas) return;
@@ -189,12 +226,21 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
 
         {/* Recent opportunities — fonte: arquivos JSON em {workspace}/freelas/ */}
         <section className="bg-card rounded-2xl border border-border p-5 shadow-card">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="flex items-baseline gap-2 shrink-0">
-              <h2 className="text-[16px] font-semibold text-primary">Oportunidades recentes</h2>
-              <span className="text-[11.5px] font-medium text-secondary">ordenadas por match</span>
+          <div className="flex flex-col gap-2.5 mb-3">
+            {/* Linha 1: título + ordenação (esquerda) — sempre visível e clicável,
+                nunca disputa espaço com o resto dos controles. */}
+            <div className="flex items-baseline gap-2 min-w-0">
+              <h2 className="text-[16px] font-semibold text-primary shrink-0">Oportunidades recentes</h2>
+              <span className="text-[11.5px] font-medium text-secondary truncate">
+                {sortBy === 'match' ? 'ordenadas por match' : sortBy === 'recentes' ? 'ordenadas por mais recentes' : 'ordenadas por maior orçamento'}
+              </span>
             </div>
-            <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+
+            {/* Linha 2: ações — "Executar agentes" isolado à esquerda (não
+                encolhe), busca/refresh/paginação à direita. flex-wrap garante
+                que nada se sobreponha em larguras menores: o grupo da direita
+                quebra pra uma nova linha antes de espremer o botão. */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               {/* Executar time de agentes sobre as vagas selecionadas */}
               <button
                 onClick={runTeamOnSelected}
@@ -212,68 +258,101 @@ export function RadarPage({ onNavigate, onOpenAgent }: RadarPageProps = {}) {
                   ? 'Executando…'
                   : `Executar agentes${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
               </button>
-              {/* Busca por título ou tag */}
-              <div className="relative flex-1 max-w-[280px]">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
-                <input
-                  type="text"
-                  value={freelasQuery}
-                  onChange={(e) => setFreelasQuery(e.target.value)}
-                  placeholder="Buscar por nome ou tag…"
-                  className="w-full h-8 pl-7 pr-7 rounded-lg border border-border bg-white text-[12.5px] outline-none focus:border-purple-ring"
-                />
-                {freelasQuery && (
-                  <button
-                    onClick={() => setFreelasQuery('')}
-                    aria-label="Limpar busca"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md grid place-items-center text-muted hover:text-primary hover:bg-[#f5f5f7] transition"
-                  >
-                    <X size={12} />
-                  </button>
+
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {/* Filtro rápido por classificação (Alta/Média/Baixa/Evitar) */}
+                <select
+                  value={tierFilter}
+                  onChange={(e) => setTierFilter(e.target.value as MatchTier | 'todos')}
+                  aria-label="Filtrar por classificação"
+                  title="Filtrar por classificação"
+                  className="h-8 px-2 rounded-lg border border-border bg-white text-[12.5px] text-primary outline-none focus:border-purple-ring shrink-0"
+                >
+                  <option value="todos">Todos</option>
+                  <option value="alta">Alta</option>
+                  <option value="media">Média</option>
+                  <option value="baixa">Baixa</option>
+                  <option value="evitar">Evitar</option>
+                </select>
+                {/* Ordenação */}
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as 'recentes' | 'match' | 'orcamento')}
+                  aria-label="Ordenar por"
+                  title="Ordenar por"
+                  className="h-8 px-2 rounded-lg border border-border bg-white text-[12.5px] text-primary outline-none focus:border-purple-ring shrink-0"
+                >
+                  <option value="match">Maior match</option>
+                  <option value="recentes">Recentes</option>
+                  <option value="orcamento">Maior orçamento</option>
+                </select>
+                {/* Busca por título ou tag */}
+                <div className="relative w-full max-w-[280px] min-w-[160px] flex-1">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+                  <input
+                    type="text"
+                    value={freelasQuery}
+                    onChange={(e) => setFreelasQuery(e.target.value)}
+                    placeholder="Buscar por nome ou tag…"
+                    className="w-full h-8 pl-7 pr-7 rounded-lg border border-border bg-white text-[12.5px] outline-none focus:border-purple-ring"
+                  />
+                  {freelasQuery && (
+                    <button
+                      onClick={() => setFreelasQuery('')}
+                      aria-label="Limpar busca"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md grid place-items-center text-muted hover:text-primary hover:bg-[#f5f5f7] transition"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                {/* Refresh: re-lê os JSONs do workspace */}
+                <button
+                  onClick={refreshFreelas}
+                  disabled={refreshingFreelas}
+                  aria-label="Recarregar oportunidades dos JSONs"
+                  title="Recarregar oportunidades dos JSONs"
+                  className="w-8 h-8 rounded-lg border border-border bg-white text-secondary grid place-items-center hover:bg-[#f8f8fb] hover:text-primary disabled:opacity-50 transition shrink-0"
+                >
+                  <RotateCw size={14} className={cn(refreshingFreelas && 'animate-spin')} />
+                </button>
+                {/* Paginação no lugar do antigo "Ver todas" */}
+                {filteredFreelas.length > 0 && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setFreelasPage((p) => Math.max(0, p - 1))}
+                      disabled={!canPrevFreelas}
+                      aria-label="Página anterior"
+                      className="w-7 h-7 rounded-md border border-border bg-white text-primary grid place-items-center hover:bg-[#f8f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span className="px-2 text-[12.5px] text-secondary tabular-nums">
+                      {freelasPage + 1} <span className="text-muted">/ {freelasTotalPages}</span>
+                    </span>
+                    <button
+                      onClick={() => setFreelasPage((p) => Math.min(freelasTotalPages - 1, p + 1))}
+                      disabled={!canNextFreelas}
+                      aria-label="Próxima página"
+                      className="w-7 h-7 rounded-md border border-border bg-white text-primary grid place-items-center hover:bg-[#f8f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
                 )}
               </div>
-              {/* Refresh: re-lê os JSONs do workspace */}
-              <button
-                onClick={refreshFreelas}
-                disabled={refreshingFreelas}
-                aria-label="Recarregar oportunidades dos JSONs"
-                title="Recarregar oportunidades dos JSONs"
-                className="w-8 h-8 rounded-lg border border-border bg-white text-secondary grid place-items-center hover:bg-[#f8f8fb] hover:text-primary disabled:opacity-50 transition shrink-0"
-              >
-                <RotateCw size={14} className={cn(refreshingFreelas && 'animate-spin')} />
-              </button>
-              {/* Paginação no lugar do antigo "Ver todas" */}
-              {filteredFreelas.length > 0 && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => setFreelasPage((p) => Math.max(0, p - 1))}
-                    disabled={!canPrevFreelas}
-                    aria-label="Página anterior"
-                    className="w-7 h-7 rounded-md border border-border bg-white text-primary grid place-items-center hover:bg-[#f8f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span className="px-2 text-[12.5px] text-secondary tabular-nums">
-                    {freelasPage + 1} <span className="text-muted">/ {freelasTotalPages}</span>
-                  </span>
-                  <button
-                    onClick={() => setFreelasPage((p) => Math.min(freelasTotalPages - 1, p + 1))}
-                    disabled={!canNextFreelas}
-                    aria-label="Próxima página"
-                    className="w-7 h-7 rounded-md border border-border bg-white text-primary grid place-items-center hover:bg-[#f8f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              )}
             </div>
           </div>
           <div>
             {filteredFreelas.length === 0 ? (
               <p className="text-[13px] text-secondary py-3 text-center">
-                {freelasQuery
-                  ? <>Nenhum resultado para "<strong className="text-primary">{freelasQuery}</strong>".</>
-                  : <>Nenhuma oportunidade encontrada — rode uma varredura ou ajuste as tags monitoradas.</>}
+                {freelasQuery ? (
+                  <>Nenhum resultado para "<strong className="text-primary">{freelasQuery}</strong>".</>
+                ) : tierFilter !== 'todos' ? (
+                  <>Nenhuma oportunidade na classificação "<strong className="text-primary">{tierFilter}</strong>" — tente outro filtro.</>
+                ) : (
+                  <>Nenhuma oportunidade encontrada — rode uma varredura ou ajuste as tags monitoradas.</>
+                )}
               </p>
             ) : (
               filteredFreelas
