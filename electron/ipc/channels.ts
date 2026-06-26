@@ -63,6 +63,14 @@ export const CH = {
     ready: 'system:ready',
     window: 'system:window', // close|minimize|maximize
   },
+  workana: {
+    openLogin: 'workana:openLogin',
+    finishLogin: 'workana:finishLogin',
+    cancelLogin: 'workana:cancelLogin',
+    getStatus: 'workana:getStatus',
+    verifySession: 'workana:verifySession',
+    clearSession: 'workana:clearSession',
+  },
   app: {
     getConfig: 'app:getConfig',
     setConfig: 'app:setConfig',

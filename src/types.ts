@@ -1,4 +1,5 @@
-export type ProviderId = 'claude-cli' | 'anthropic' | 'openai' | 'gemini';
+export type ProviderId = 'claude-cli' | 'anthropic' | 'openai' | 'gemini' | 'workana-messenger';
+
 export interface Agent {
   id: number;
   name: string;

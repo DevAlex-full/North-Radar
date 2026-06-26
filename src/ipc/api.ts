@@ -43,6 +43,13 @@ export interface TeamRunResult {
   dir: string;
 }
 
+/** Status local da sessão salva do Workana (ver WorkanaSessionService.ts). */
+export interface WorkanaSessionStatus {
+  exists: boolean;
+  savedAt: string | null;
+  lastCheck: { ok: boolean; checkedAt: string } | null;
+}
+
 /** Opções para iniciar a raspagem do Workana. */
 export interface ScrapperOptions {
   url: string;
@@ -168,6 +175,14 @@ interface FreelaApi {
     showItemInFolder: (fullPath: string) => Promise<boolean>;
     openPath: (fullPath: string) => Promise<string>;
     openWorkspaceDir: (name: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+  };
+  workana: {
+    openLogin: () => Promise<{ ok: boolean; error?: string }>;
+    finishLogin: () => Promise<{ ok: boolean; error?: string }>;
+    cancelLogin: () => Promise<boolean>;
+    getStatus: () => Promise<WorkanaSessionStatus>;
+    verifySession: () => Promise<{ ok: boolean; error?: string }>;
+    clearSession: () => Promise<boolean>;
   };
 }
 

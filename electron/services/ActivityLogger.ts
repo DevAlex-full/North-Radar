@@ -4,7 +4,7 @@ import * as schema from '../db/schema';
 import { desc } from 'drizzle-orm';
 
 export interface ActivityEntry {
-  type: 'agent_run' | 'opportunity' | 'scan' | 'error' | 'document';
+  type: 'agent_run' | 'opportunity' | 'scan' | 'error' | 'document' | 'workana_send';
   title: string;
   description?: string;
   metadata?: Record<string, unknown>;

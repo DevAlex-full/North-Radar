@@ -50,17 +50,21 @@ const OUTPUT_FORMATS = ['markdown', 'structured_markdown', 'json', 'checklist', 
 
 // Provider Layer: cada provider tem seu próprio conjunto de modelos válidos.
 // 'claude-cli' é o provider LEGADO (depende do Claude CLI instalado na máquina).
-const PROVIDERS: Array<{ id: 'claude-cli' | 'anthropic' | 'openai' | 'gemini'; label: string }> = [
+// 'workana-messenger' não chama LLM nenhum — não tem "modelo" de fato; o
+// valor sentinela abaixo existe só para a UI ter uma opção a mostrar/salvar.
+const PROVIDERS: Array<{ id: 'claude-cli' | 'anthropic' | 'openai' | 'gemini' | 'workana-messenger'; label: string }> = [
   { id: 'claude-cli', label: 'Claude CLI (legado)' },
   { id: 'anthropic', label: 'Anthropic API' },
   { id: 'openai', label: 'OpenAI API' },
   { id: 'gemini', label: 'Gemini API' },
+  { id: 'workana-messenger', label: 'Workana Messenger (automação)' },
 ];
 const MODELS_BY_PROVIDER: Record<string, string[]> = {
   'claude-cli': ['sonnet', 'opus', 'haiku'],
   anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o3'],
   gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  'workana-messenger': ['workana'],
 };
 const MODELS = MODELS_BY_PROVIDER['claude-cli'];
 
@@ -737,15 +741,18 @@ function AgentEditor({ agent, onSaved, onDelete }: EditorProps) {
               {(MODELS_BY_PROVIDER[draft.provider ?? 'claude-cli'] ?? MODELS).map((m) => <option key={m}>{m}</option>)}
             </select>
           </Field>
-
         </div>
-        {draft.provider !== 'claude-cli' && (
+        {draft.provider === 'workana-messenger' ? (
+          <p className="text-[12px] text-secondary mb-4 -mt-2">
+            Requer sessão do Workana salva em Settings → Workana. Esta etapa só registra o agente —
+            o envio de proposta em si ainda não está implementado.
+          </p>
+        ) : draft.provider !== 'claude-cli' && (
           <p className="text-[12px] text-secondary mb-4 -mt-2">
             Requer a chave de API correspondente salva em Settings → Chaves.
           </p>
         )}
         <div className="grid grid-cols-3 gap-4">
-
           <Field label="Effort level">
             <select value={draft.effort_level} onChange={(e) => set('effort_level', e.target.value)} className={inputCls}>
               {EFFORT_LEVELS.map((m) => <option key={m}>{m}</option>)}
@@ -796,18 +803,18 @@ function AgentEditor({ agent, onSaved, onDelete }: EditorProps) {
       {/* Runtime preview */}
       <Section title="Runtime config (JSON)" icon={Braces}>
         <pre className="bg-[#0f1322] text-[#cdd5f5] text-[12px] leading-relaxed p-4 rounded-xl overflow-x-auto">
-          {JSON.stringify({
-            model: draft.model,
-            effort: draft.effort_level,
-            autonomy: draft.autonomy_level,
-            cloud_p: true,
-            skip_permissions: true,
-            temperature: draft.temperature,
-            max_tokens: draft.max_tokens,
-            timeout_seconds: draft.timeout_seconds,
-            tools: Object.fromEntries(tools.map((t) => [t.tool_name, t.enabled])),
-            ...runtimeConfig,
-          }, null, 2)}
+{JSON.stringify({
+  model: draft.model,
+  effort: draft.effort_level,
+  autonomy: draft.autonomy_level,
+  cloud_p: true,
+  skip_permissions: true,
+  temperature: draft.temperature,
+  max_tokens: draft.max_tokens,
+  timeout_seconds: draft.timeout_seconds,
+  tools: Object.fromEntries(tools.map((t) => [t.tool_name, t.enabled])),
+  ...runtimeConfig,
+}, null, 2)}
         </pre>
       </Section>
 
@@ -1148,4 +1155,3 @@ function IconPicker({ value, onChange }: { value: string; onChange: (seed: strin
     </div>
   );
 }
-

@@ -2,6 +2,7 @@ import { ClaudeCliProvider } from './ClaudeCliProvider';
 import { AnthropicApiProvider } from './AnthropicApiProvider';
 import { OpenAiProvider } from './OpenAiProvider';
 import { GeminiProvider } from './GeminiProvider';
+import { WorkanaMessengerProvider } from './WorkanaMessengerProvider';
 import type { AgentProvider, ProviderId, ProviderExecuteOptions, ProviderExecuteResult } from './types';
 
 /**
@@ -18,6 +19,7 @@ class ProviderRegistryImpl {
     anthropic: AnthropicApiProvider,
     openai: OpenAiProvider,
     gemini: GeminiProvider,
+    'workana-messenger': WorkanaMessengerProvider,
   };
 
   resolve(providerId: string | null | undefined): AgentProvider {
@@ -33,14 +35,15 @@ class ProviderRegistryImpl {
 
     const configured = await provider.isConfigured();
     if (!configured) {
+      const message =
+        provider.id === 'workana-messenger'
+          ? 'Workana Messenger Agent: nenhuma sessão salva. Configure em Settings → Workana.'
+          : `Provider "${provider.id}" não está configurado (chave de API ausente em Settings → Chaves).`;
       return {
         ok: false,
         output: '',
         meta: { provider: provider.id, model: opts.model, durationMs: 0 },
-        error: {
-          message: `Provider "${provider.id}" não está configurado (chave de API ausente em Settings → Chaves).`,
-          kind: 'auth',
-        },
+        error: { message, kind: 'auth' },
       };
     }
 

@@ -14,6 +14,7 @@ export const agents = sqliteTable('agents', {
   effort_level: text('effort_level').default('medium'), // low | medium | high | maximum
   autonomy_level: text('autonomy_level').default('semi'), // manual | semi | autonomous | full
   model: text('model').default('sonnet'),
+  /** Provider que executa este agente: claude-cli (legado) | anthropic | openai | gemini. */
   provider: text('provider').default('claude-cli'),
   temperature: real('temperature').default(0.3),
   max_tokens: integer('max_tokens').default(12000),
@@ -107,7 +108,7 @@ export const settings = sqliteTable('settings', {
 
 export const activity_logs = sqliteTable('activity_logs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  type: text('type').notNull(), // agent_run | opportunity | scan | error | document
+  type: text('type').notNull(), // agent_run | opportunity | scan | error | document | workana_send
   title: text('title').notNull(),
   description: text('description').default(''),
   metadata_json: text('metadata_json').default('{}'),

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Save, X, Settings as SettingsIcon, Sliders, Key, Target, FolderOpen, ScanLine, DatabaseZap, type LucideIcon } from 'lucide-react';
+import { Save, X, Settings as SettingsIcon, Sliders, Key, Target, FolderOpen, ScanLine, DatabaseZap, Globe, type LucideIcon } from 'lucide-react';
 import { api } from '../ipc/api';
 import { cn } from '../lib/utils';
 import type { AppConfig } from '../types';
+import type { WorkanaSessionStatus } from '../ipc/api';
 
-type Tab = 'geral' | 'claude' | 'playwright' | 'chaves' | 'match';
+type Tab = 'geral' | 'claude' | 'playwright' | 'chaves' | 'match' | 'workana';
 
 const TABS: Array<{ key: Tab; label: string; Icon: LucideIcon }> = [
   { key: 'geral',      label: 'Geral', Icon: SettingsIcon },
@@ -12,6 +13,7 @@ const TABS: Array<{ key: Tab; label: string; Icon: LucideIcon }> = [
   { key: 'playwright', label: 'Playwright', Icon: ScanLine },
   { key: 'chaves',     label: 'Chaves', Icon: Key },
   { key: 'match',      label: 'Match Engine', Icon: Target },
+  { key: 'workana',    label: 'Workana', Icon: Globe },
 ];
 
 // System prompt padrão exibido na aba Playwright (espelha o default do backend).
@@ -36,6 +38,16 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
   const [toast, setToast] = useState<string | null>(null);
   const [appCfg, setAppCfg] = useState<(AppConfig & { activeDbPath: string }) | null>(null);
   const [appCfgDirty, setAppCfgDirty] = useState(false);
+
+  // Etapa 1 — sessão do Workana (login manual assistido).
+  const [workanaStatus, setWorkanaStatus] = useState<WorkanaSessionStatus | null>(null);
+  const [workanaLoginOpen, setWorkanaLoginOpen] = useState(false); // janela do Chromium está aberta, aguardando "Concluir"
+  const [workanaBusy, setWorkanaBusy] = useState<'open' | 'finish' | 'cancel' | 'verify' | 'clear' | null>(null);
+  const [workanaVerifyResult, setWorkanaVerifyResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
+  const refreshWorkanaStatus = () => {
+    api.workana.getStatus().then(setWorkanaStatus);
+  };
 
   useEffect(() => {
     api.settings.getAll().then((rows) => {
@@ -63,6 +75,7 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
       }
     });
     api.app.getConfig().then(setAppCfg);
+    refreshWorkanaStatus();
   }, []);
 
   const set = (key: string, value: string) => {
@@ -96,6 +109,76 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
   const pickWorkspace = async () => {
     const picked = await api.app.pickDirectory({ defaultPath: appCfg?.workspacePath, title: 'Escolher workspace' });
     if (picked) setApp('workspacePath', picked);
+  };
+
+  // ── Workana — login manual assistido (Etapa 1) ──
+  const workanaOpenLogin = async () => {
+    setWorkanaBusy('open');
+    setWorkanaVerifyResult(null);
+    try {
+      const res = await api.workana.openLogin();
+      if (res.ok) {
+        setWorkanaLoginOpen(true);
+      } else {
+        setToast(res.error ?? 'Não foi possível abrir o navegador.');
+        setTimeout(() => setToast(null), 4000);
+      }
+    } finally {
+      setWorkanaBusy(null);
+    }
+  };
+
+  const workanaFinishLogin = async () => {
+    setWorkanaBusy('finish');
+    try {
+      const res = await api.workana.finishLogin();
+      if (res.ok) {
+        setWorkanaLoginOpen(false);
+        setToast('Sessão do Workana salva com sucesso.');
+        setTimeout(() => setToast(null), 3500);
+        refreshWorkanaStatus();
+      } else {
+        setToast(res.error ?? 'Não foi possível salvar a sessão.');
+        setTimeout(() => setToast(null), 4000);
+      }
+    } finally {
+      setWorkanaBusy(null);
+    }
+  };
+
+  const workanaCancelLogin = async () => {
+    setWorkanaBusy('cancel');
+    try {
+      await api.workana.cancelLogin();
+      setWorkanaLoginOpen(false);
+    } finally {
+      setWorkanaBusy(null);
+    }
+  };
+
+  const workanaVerify = async () => {
+    setWorkanaBusy('verify');
+    setWorkanaVerifyResult(null);
+    try {
+      const res = await api.workana.verifySession();
+      setWorkanaVerifyResult(res);
+      refreshWorkanaStatus();
+    } finally {
+      setWorkanaBusy(null);
+    }
+  };
+
+  const workanaClear = async () => {
+    const ok = window.confirm('Remover a sessão salva do Workana? Você precisará logar novamente para usar o Messenger Agent.');
+    if (!ok) return;
+    setWorkanaBusy('clear');
+    try {
+      await api.workana.clearSession();
+      setWorkanaVerifyResult(null);
+      refreshWorkanaStatus();
+    } finally {
+      setWorkanaBusy(null);
+    }
   };
 
   const save = async () => {
@@ -282,7 +365,7 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
                       className={inputCls}
                     >
                       <option value="light">Claro</option>
-                      <option value="dark">Escuro</option>
+                      <option value="dio">Escuro</option>
                     </select>
                   </Field>
                   <Field label="Idioma">
@@ -668,6 +751,130 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
                   O <strong>peso</strong> de cada tag é configurado em <strong>Radar → Editar tags</strong>. O score é a soma dos pesos das tags presentes no texto, dividida pela soma dos pesos de todas as tags ativas.
                 </p>
               </Card>
+            )}
+
+            {tab === 'workana' && (
+              <>
+                <Card
+                  title="Sessão do Workana"
+                  subtitle="O North Radar nunca vê ou guarda seu usuário/senha. Você loga manualmente numa janela do navegador; só os cookies da sessão resultante são salvos localmente, no seu computador."
+                >
+                  {workanaLoginOpen ? (
+                    <div className="rounded-xl border border-purple-ring bg-purple-soft/40 p-4 space-y-3">
+                      <p className="text-[13px] text-primary leading-relaxed">
+                        Uma janela do navegador foi aberta na página de login do Workana. Faça login
+                        normalmente nela e, quando terminar, volte aqui e clique em <strong>“Concluí o login”</strong>.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={workanaFinishLogin}
+                          disabled={workanaBusy !== null}
+                          className="h-9 px-3.5 rounded-lg bg-purple text-white text-[13px] font-semibold hover:opacity-90 disabled:opacity-50"
+                        >
+                          {workanaBusy === 'finish' ? 'Salvando sessão…' : 'Concluí o login'}
+                        </button>
+                        <button
+                          onClick={workanaCancelLogin}
+                          disabled={workanaBusy !== null}
+                          className="h-9 px-3.5 rounded-lg border border-border bg-white text-[13px] font-medium text-primary hover:bg-[#f8f8fb] disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        {workanaStatus?.exists ? (
+                          <p className="text-[13px] text-primary">
+                            <span className="inline-block w-2 h-2 rounded-full bg-[#16a34a] mr-1.5" />
+                            Sessão salva
+                            {workanaStatus.savedAt && (
+                              <span className="text-secondary">
+                                {' '}em {new Date(workanaStatus.savedAt).toLocaleString('pt-BR')}
+                              </span>
+                            )}
+                          </p>
+                        ) : (
+                          <p className="text-[13px] text-secondary">
+                            <span className="inline-block w-2 h-2 rounded-full bg-[#d1d1d8] mr-1.5" />
+                            Nenhuma sessão salva ainda.
+                          </p>
+                        )}
+                        {workanaVerifyResult && (
+                          <p className={cn('text-[12px] mt-1', workanaVerifyResult.ok ? 'text-[#16a34a]' : 'text-rose')}>
+                            {workanaVerifyResult.ok ? '✓ Sessão verificada e válida.' : `✗ ${workanaVerifyResult.error}`}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {workanaStatus?.exists && (
+                          <>
+                            <button
+                              onClick={workanaVerify}
+                              disabled={workanaBusy !== null}
+                              className="h-9 px-3.5 rounded-lg border border-border bg-white text-[13px] font-medium text-primary hover:bg-[#f8f8fb] disabled:opacity-50"
+                            >
+                              {workanaBusy === 'verify' ? 'Verificando…' : 'Verificar sessão'}
+                            </button>
+                            <button
+                              onClick={workanaClear}
+                              disabled={workanaBusy !== null}
+                              className="h-9 px-3.5 rounded-lg border border-border bg-white text-[13px] font-medium text-rose hover:bg-[#fee2e2] disabled:opacity-50"
+                            >
+                              Desconectar
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={workanaOpenLogin}
+                          disabled={workanaBusy !== null}
+                          className="h-9 px-3.5 rounded-lg bg-purple text-white text-[13px] font-semibold hover:opacity-90 disabled:opacity-50"
+                        >
+                          {workanaBusy === 'open' ? 'Abrindo…' : workanaStatus?.exists ? 'Logar novamente' : 'Abrir navegador para login'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+
+                <Card
+                  title="Envio de propostas"
+                  subtitle="Travas de segurança do Workana Messenger Agent. Estas configurações ainda não disparam nenhum envio — a Etapa 1 cobre apenas a sessão de login."
+                >
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field
+                      label="Cooldown entre envios (min)"
+                      help="Tempo mínimo de espera entre dois envios de proposta consecutivos."
+                    >
+                      <input
+                        type="number"
+                        min={0}
+                        value={values['workana.cooldown_minutes'] ?? '30'}
+                        onChange={(e) => set('workana.cooldown_minutes', e.target.value)}
+                        className={inputCls}
+                      />
+                    </Field>
+                    <Field
+                      label="Limite por execução"
+                      help="Travado em 1 nesta etapa (regra de segurança) — não editável ainda."
+                    >
+                      <input
+                        type="number"
+                        value={1}
+                        disabled
+                        className={inputCls + ' opacity-60 cursor-not-allowed'}
+                      />
+                    </Field>
+                  </div>
+                  <p className="text-[12px] text-muted leading-relaxed">
+                    O limite por execução é travado em 1 (regra de segurança) e ainda não é editável.
+                    As demais travas (sessão válida, sem captcha, layout reconhecido, sem proposta
+                    duplicada, campos obrigatórios preenchidos, screenshot do envio) serão
+                    implementadas junto do Workana Messenger Agent no Estúdio, nas próximas etapas.
+                  </p>
+                </Card>
+              </>
             )}
           </div>
         </div>

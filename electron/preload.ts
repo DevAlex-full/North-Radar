@@ -95,6 +95,14 @@ const api = {
     openPath: (fullPath: string) => invoke(CH.app.openPath, fullPath),
     openWorkspaceDir: (name: string) => invoke(CH.app.openWorkspaceDir, name),
   },
+  workana: {
+    openLogin: () => invoke(CH.workana.openLogin),
+    finishLogin: () => invoke(CH.workana.finishLogin),
+    cancelLogin: () => invoke(CH.workana.cancelLogin),
+    getStatus: () => invoke(CH.workana.getStatus),
+    verifySession: () => invoke(CH.workana.verifySession),
+    clearSession: () => invoke(CH.workana.clearSession),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

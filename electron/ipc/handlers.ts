@@ -14,6 +14,7 @@ import { MatchEngine } from '../services/MatchEngine';
 import { TeamPipeline, type PipelineOpportunity } from '../services/TeamPipeline';
 import { readAppConfig, updateAppConfig, ensureWorkspaceExists, type AppConfig } from '../services/AppConfig';
 import { getExecutionsDir, getFreelasDir, getOportunidadesDir, getWorkspaceSubdir } from '../services/ExecutionStorage';
+import { WorkanaSessionService } from '../services/WorkanaSessionService';
 
 function broadcast(window: BrowserWindow | null, channel: string, payload: unknown) {
   if (window && !window.isDestroyed()) {
@@ -665,5 +666,33 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  });
+
+  // ── Workana — sessão (login manual assistido + persistência via Playwright) ──
+  // Etapa 1: só sessão. Nenhum handler de envio de proposta ainda.
+  ipcMain.handle(CH.workana.openLogin, async () => {
+    return WorkanaSessionService.openLoginWindow();
+  });
+
+  ipcMain.handle(CH.workana.finishLogin, async () => {
+    return WorkanaSessionService.finishLogin();
+  });
+
+  ipcMain.handle(CH.workana.cancelLogin, async () => {
+    await WorkanaSessionService.cancelLogin();
+    return true;
+  });
+
+  ipcMain.handle(CH.workana.getStatus, () => {
+    return WorkanaSessionService.getStatus();
+  });
+
+  ipcMain.handle(CH.workana.verifySession, async () => {
+    return WorkanaSessionService.verifySession();
+  });
+
+  ipcMain.handle(CH.workana.clearSession, () => {
+    WorkanaSessionService.clearSession();
+    return true;
   });
 }

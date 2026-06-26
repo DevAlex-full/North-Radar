@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { readAppConfig } from './AppConfig';
+import { profilePath } from './ProfileContext';
 import { getDb } from '../db/client';
 import * as schema from '../db/schema';
 
@@ -109,6 +110,22 @@ export function getFreelasDir(): string {
 
 export function getOportunidadesDir(): string {
   return getWorkspaceSubdir(resolveDirName('workspace.dir.oportunidades', 'oportunidades'));
+}
+
+/**
+ * Pasta de sessão do Workana (storageState do Playwright) do perfil ativo —
+ * `{workspace}/profiles/{profileId}/workana-session/`. Usa `profilePath()`
+ * (ProfileContext.ts) em vez de um nome fixo na raiz do workspace, para que
+ * a futura Fase 5 (Perfis Locais) não precise migrar nenhum caminho — basta
+ * `getActiveProfileId()` passar a resolver o perfil selecionado pelo usuário.
+ */
+export function getWorkanaSessionDir(): string {
+  return getWorkspaceSubdir(profilePath('workana-session'));
+}
+
+/** Screenshots de envios do Workana Messenger — mesmo raciocínio de `getWorkanaSessionDir`. */
+export function getWorkanaScreenshotsDir(): string {
+  return getWorkspaceSubdir(profilePath('workana-screenshots'));
 }
 
 /**
