@@ -39,7 +39,16 @@ export interface ProviderExecuteOptions {
    * ClaudeCliProvider para repassar como env vars ao processo `claude` (puramente
    * de debug/inspeção, sem efeito funcional). Providers HTTP ignoram este campo.
    */
-  context?: { agentSlug?: string; runId?: number };
+  context?: {
+    agentSlug?: string;
+    runId?: number;
+    /**
+     * URL da vaga sendo processada — passado pelo TeamPipeline quando o
+     * provider é 'workana-messenger', para que o MessengerRuntime saiba qual
+     * página abrir. Ignorado por todos os outros providers.
+     */
+    opportunityUrl?: string;
+  };
 }
 
 export type ProviderErrorKind =

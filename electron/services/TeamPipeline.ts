@@ -219,7 +219,12 @@ class TeamPipelineImpl extends EventEmitter {
               temperature: agent.temperature ?? undefined,
               maxTokens: agent.max_tokens ?? undefined,
               timeoutSeconds: agent.timeout_seconds ?? 300,
-              context: { agentSlug: agent.slug },
+              context: {
+                agentSlug: agent.slug,
+                // Para o WorkanaMessengerProvider: a URL canônica da vaga que
+                // o Messenger deve abrir. Ignorado por todos os outros providers.
+                opportunityUrl: opp.source_url ?? undefined,
+              },
             });
             if (result.ok && result.output.trim()) {
               output = result.output.trim();

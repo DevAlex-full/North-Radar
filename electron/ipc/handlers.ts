@@ -15,6 +15,7 @@ import { TeamPipeline, type PipelineOpportunity } from '../services/TeamPipeline
 import { readAppConfig, updateAppConfig, ensureWorkspaceExists, type AppConfig } from '../services/AppConfig';
 import { getExecutionsDir, getFreelasDir, getOportunidadesDir, getWorkspaceSubdir } from '../services/ExecutionStorage';
 import { WorkanaSessionService } from '../services/WorkanaSessionService';
+import { MessengerRuntime } from '../services/messenger/MessengerRuntime';
 
 function broadcast(window: BrowserWindow | null, channel: string, payload: unknown) {
   if (window && !window.isDestroyed()) {
@@ -694,5 +695,19 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(CH.workana.clearSession, () => {
     WorkanaSessionService.clearSession();
     return true;
+  });
+
+  // Diagnóstico de navegação: abre o navegador com a sessão salva, navega
+  // até a URL da vaga, localiza o botão "Enviar proposta" e para.
+  // NUNCA clica, NUNCA preenche, NUNCA envia proposta.
+  // Usado em Settings → Workana → Testar navegação.
+  ipcMain.handle(CH.workana.testNavigation, async (_e, url: string) => {
+    const runtime = new MessengerRuntime();
+    return runtime.run({
+      prompt: '', // sem proposta — só diagnóstico
+      model: 'workana',
+      opportunityUrl: url,
+      context: { agentSlug: 'workana-messenger-agent', runId: 0 },
+    });
   });
 }

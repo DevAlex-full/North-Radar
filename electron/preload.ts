@@ -102,6 +102,7 @@ const api = {
     getStatus: () => invoke(CH.workana.getStatus),
     verifySession: () => invoke(CH.workana.verifySession),
     clearSession: () => invoke(CH.workana.clearSession),
+    testNavigation: (url: string) => invoke(CH.workana.testNavigation, url),
   },
 };
 

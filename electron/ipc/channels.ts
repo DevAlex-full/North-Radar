@@ -70,6 +70,7 @@ export const CH = {
     getStatus: 'workana:getStatus',
     verifySession: 'workana:verifySession',
     clearSession: 'workana:clearSession',
+    testNavigation: 'workana:testNavigation',
   },
   app: {
     getConfig: 'app:getConfig',

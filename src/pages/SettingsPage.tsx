@@ -42,8 +42,10 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
   // Etapa 1 — sessão do Workana (login manual assistido).
   const [workanaStatus, setWorkanaStatus] = useState<WorkanaSessionStatus | null>(null);
   const [workanaLoginOpen, setWorkanaLoginOpen] = useState(false); // janela do Chromium está aberta, aguardando "Concluir"
-  const [workanaBusy, setWorkanaBusy] = useState<'open' | 'finish' | 'cancel' | 'verify' | 'clear' | null>(null);
+  const [workanaBusy, setWorkanaBusy] = useState<'open' | 'finish' | 'cancel' | 'verify' | 'clear' | 'test-nav' | null>(null);
   const [workanaVerifyResult, setWorkanaVerifyResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [workanaNavUrl, setWorkanaNavUrl] = useState('');
+  const [workanaNavResult, setWorkanaNavResult] = useState<import('../ipc/api').NavigationTestResult | null>(null);
 
   const refreshWorkanaStatus = () => {
     api.workana.getStatus().then(setWorkanaStatus);
@@ -176,6 +178,19 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
       await api.workana.clearSession();
       setWorkanaVerifyResult(null);
       refreshWorkanaStatus();
+    } finally {
+      setWorkanaBusy(null);
+    }
+  };
+
+  const workanaTestNavigation = async () => {
+    const url = workanaNavUrl.trim();
+    if (!url) return;
+    setWorkanaBusy('test-nav');
+    setWorkanaNavResult(null);
+    try {
+      const result = await api.workana.testNavigation(url);
+      setWorkanaNavResult(result);
     } finally {
       setWorkanaBusy(null);
     }
@@ -873,6 +888,65 @@ export function SettingsPage({ onConfigChanged, onThemeChange }: SettingsPagePro
                     duplicada, campos obrigatórios preenchidos, screenshot do envio) serão
                     implementadas junto do Workana Messenger Agent no Estúdio, nas próximas etapas.
                   </p>
+                </Card>
+
+                <Card
+                  title="Diagnóstico de navegação"
+                  subtitle="Testa se o Messenger consegue abrir uma vaga e localizar o botão 'Enviar proposta'. Nunca clica, nunca preenche, nunca envia."
+                >
+                  <div className="space-y-3">
+                    <Field label="URL da vaga no Workana" help="Cole a URL de um projeto do Workana (ex: https://www.workana.com/project/...).">
+                      <input
+                        type="url"
+                        value={workanaNavUrl}
+                        onChange={(e) => setWorkanaNavUrl(e.target.value)}
+                        placeholder="https://www.workana.com/project/..."
+                        className={inputCls}
+                        disabled={workanaBusy === 'test-nav'}
+                      />
+                    </Field>
+                    <button
+                      onClick={workanaTestNavigation}
+                      disabled={workanaBusy !== null || !workanaNavUrl.trim() || !workanaStatus?.exists}
+                      title={!workanaStatus?.exists ? 'Faça login primeiro em Sessão do Workana' : ''}
+                      className="h-9 px-4 rounded-lg bg-purple text-white text-[13px] font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      {workanaBusy === 'test-nav' ? 'Testando navegação…' : 'Testar navegação'}
+                    </button>
+                    {!workanaStatus?.exists && (
+                      <p className="text-[12px] text-amber">
+                        ⚠️ Faça login em "Sessão do Workana" antes de testar a navegação.
+                      </p>
+                    )}
+                    {workanaNavResult && (
+                      <div className={cn(
+                        'rounded-xl border p-4 space-y-2',
+                        workanaNavResult.ok ? 'border-[#16a34a]/30 bg-green-soft/40' : 'border-rose/30 bg-[#fee2e2]/40',
+                      )}>
+                        <div className="flex items-center gap-2">
+                          <span className={cn('text-[13px] font-semibold', workanaNavResult.ok ? 'text-[#16a34a]' : 'text-rose')}>
+                            {workanaNavResult.ok ? '✅ Navegação bem-sucedida' : '❌ Falha na navegação'}
+                          </span>
+                          <span className="text-[11px] text-muted font-mono">
+                            ({workanaNavResult.meta.durationMs}ms)
+                          </span>
+                        </div>
+                        {workanaNavResult.error && (
+                          <p className="text-[12px] text-rose font-mono break-all">
+                            {workanaNavResult.error.message}
+                          </p>
+                        )}
+                        {workanaNavResult.output && (
+                          <details className="text-[11.5px] text-secondary cursor-pointer">
+                            <summary className="font-medium mb-1">Ver log completo</summary>
+                            <pre className="whitespace-pre-wrap font-mono text-[11px] bg-white/60 rounded-lg p-3 mt-1 max-h-[260px] overflow-auto border border-border">
+                              {workanaNavResult.output}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </Card>
               </>
             )}

@@ -138,6 +138,38 @@ export function applySchema(db: import('better-sqlite3').Database = getRawSqlite
         db.exec(`UPDATE agents SET provider = 'claude-cli' WHERE provider IS NULL OR provider = '';`);
         }
 
+  // ── Backfill: Workana Messenger Agent ───────────────────────────────────
+  // Garante que o agente existe tanto em instalações novas quanto em bancos
+  // já existentes. INSERT ignorado se slug já existe (UNIQUE constraint).
+  // Nasce inativo (enabled = 0) — o usuário habilita manualmente quando
+  // pronto para produção.
+  db.prepare(`
+    INSERT INTO agents (
+      name, slug, description,
+      soul_prompt, system_prompt, operational_prompt,
+      output_format, effort_level, autonomy_level,
+      model, provider, temperature, max_tokens,
+      retries, timeout_seconds, color, icon,
+      enabled, sort_order, runtime_config_json
+    )
+    SELECT
+      'Workana Messenger Agent',
+      'workana-messenger-agent',
+      'Envio automatizado de proposta no Workana via sessão salva',
+      'Você é o Workana Messenger Agent do North Radar. Sua única responsabilidade é receber o texto final da proposta (output do Pitch Agent) e enviá-lo automaticamente na plataforma Workana, usando a sessão de navegador previamente salva pelo usuário.',
+      'Agente de automação Playwright para o Workana. Recebe como input o texto completo da proposta comercial gerado pelo Pitch Agent e executa o envio com as travas de segurança configuradas.',
+      'Você vai receber o texto final da proposta como input. A URL da vaga está disponível no contexto como opportunityUrl. Abra o navegador com a sessão salva, navegue para a vaga, preencha e confirme o envio.',
+      'structured_markdown', 'high', 'autonomous',
+      'workana', 'workana-messenger', 0.0, 1000,
+      1, 120, 'amber', 'Send',
+      0, 4,
+      '{"model":"workana","provider":"workana-messenger","effort":"high","skip_permissions":true,"temperature":0.0,"max_tokens":1000,"timeout_seconds":120,"tools":{"terminal":false,"filesystem":false,"playwright":true},"messenger":{"max_sends_per_run":1,"require_session":true,"abort_on_captcha":true,"abort_on_unknown_layout":true}}'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM agents WHERE slug = 'workana-messenger-agent'
+    )
+  `).run();
+  console.log('[migrate] workana-messenger-agent: backfill verificado (INSERT OR SKIP by slug).');
+
   // Índices que dependem das colunas migradas — só agora podem ser criados com segurança.
   db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_sort_order ON agents(sort_order);`);
 

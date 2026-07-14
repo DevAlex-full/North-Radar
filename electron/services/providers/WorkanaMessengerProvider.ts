@@ -1,48 +1,54 @@
 import { WorkanaSessionService } from '../WorkanaSessionService';
+import { MessengerRuntime } from '../messenger/MessengerRuntime';
 import type { AgentProvider, ProviderExecuteOptions, ProviderExecuteResult } from './types';
 
 /**
  * Provider do Workana Messenger Agent.
  *
- * Natureza diferente dos outros 4 providers: não chama LLM nenhum — quando
- * implementado por completo, vai abrir o projeto no Workana com a sessão
- * salva (ver WorkanaSessionService) e enviar a proposta recebida como
- * `prompt` (o texto final produzido pelo Pitch Agent no handoff).
+ * Natureza diferente dos outros 4 providers: não chama LLM nenhum — abre o
+ * projeto no Workana com a sessão salva (WorkanaSessionService) e executa a
+ * automação via MessengerRuntime.
  *
- * NESTA ETAPA: existe só para a Provider Layer e o Studio reconhecerem
- * 'workana-messenger' como provider válido — `execute()` deliberadamente NÃO
- * envia nenhuma proposta ainda (isso é trabalho de uma etapa futura,
- * acompanhado das 8 travas de segurança definidas no plano). Chamar
- * `execute()` agora sempre retorna um erro claro e estruturado, nunca um
- * envio real nem uma simulação de sucesso — para não criar uma falsa
- * impressão de que o envio já funciona.
+ * O `prompt` recebido é o texto final da proposta (saída do Pitch Agent no
+ * handoff). O `output` é um log estruturado + confirmação do resultado.
+ * O `context.opportunityUrl` é a URL da vaga a ser aberta (passado pelo
+ * TeamPipeline quando o provider é 'workana-messenger').
+ *
+ * Fase 3: navega até o botão "Enviar proposta" e para.
+ * Nenhuma proposta é enviada ainda.
  */
 export class WorkanaMessengerProviderImpl implements AgentProvider {
   readonly id = 'workana-messenger' as const;
+  private readonly runtime = new MessengerRuntime();
 
   /**
-   * Consultivo apenas: reflete se existe sessão salva do Workana (não abre
-   * navegador, não verifica se ainda é válida — isso é `verifySession()` no
-   * WorkanaSessionService, chamado explicitamente pela trava de envio numa
-   * etapa futura, não aqui).
+   * Consultivo: reflete se existe sessão salva (não abre navegador).
+   * A verificação ativa de sessão (headless + check de URL) fica em
+   * WorkanaSessionService.verifySession(), chamada pelas travas de segurança
+   * que serão adicionadas na Fase 4.
    */
   async isConfigured(): Promise<boolean> {
     return WorkanaSessionService.getStatus().exists;
   }
 
   async execute(opts: ProviderExecuteOptions): Promise<ProviderExecuteResult> {
-    const hasSession = WorkanaSessionService.getStatus().exists;
-    return {
-      ok: false,
-      output: '',
-      meta: { provider: this.id, model: opts.model, durationMs: 0 },
-      error: {
-        message: hasSession
-          ? 'Workana Messenger Agent: envio de proposta ainda não implementado nesta etapa (apenas a sessão de login está disponível).'
-          : 'Workana Messenger Agent: nenhuma sessão do Workana salva. Configure em Settings → Workana — e o envio em si ainda não está implementado nesta etapa.',
-        kind: 'unknown',
-      },
-    };
+    const opportunityUrl = opts.context?.opportunityUrl;
+
+    if (!opportunityUrl) {
+      return {
+        ok: false,
+        output: '',
+        meta: { provider: this.id, model: opts.model, durationMs: 0 },
+        error: {
+          message:
+            'Workana Messenger: URL da vaga não fornecida. ' +
+            'O campo `context.opportunityUrl` deve ser preenchido pelo TeamPipeline com o `source_url` da oportunidade.',
+          kind: 'unknown',
+        },
+      };
+    }
+
+    return this.runtime.run({ ...opts, opportunityUrl });
   }
 }
 

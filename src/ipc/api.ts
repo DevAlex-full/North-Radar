@@ -50,6 +50,14 @@ export interface WorkanaSessionStatus {
   lastCheck: { ok: boolean; checkedAt: string } | null;
 }
 
+/** Resultado do teste de navegação (Settings → Workana → Testar navegação). */
+export interface NavigationTestResult {
+  ok: boolean;
+  output: string;
+  meta: { provider: string; model: string; durationMs: number };
+  error?: { message: string; kind: string; raw?: string };
+}
+
 /** Opções para iniciar a raspagem do Workana. */
 export interface ScrapperOptions {
   url: string;
@@ -183,6 +191,7 @@ interface FreelaApi {
     getStatus: () => Promise<WorkanaSessionStatus>;
     verifySession: () => Promise<{ ok: boolean; error?: string }>;
     clearSession: () => Promise<boolean>;
+    testNavigation: (url: string) => Promise<NavigationTestResult>;
   };
 }
 
